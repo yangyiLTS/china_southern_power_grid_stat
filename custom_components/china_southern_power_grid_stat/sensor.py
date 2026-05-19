@@ -229,7 +229,7 @@ class CSGBaseSensor(
 
     @property
     def name(self) -> str | None:
-        return f"{self._account_number}-{self._entity_suffix}"
+        return self._entity_suffix
 
     @property
     def should_poll(self) -> bool:

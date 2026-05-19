@@ -8,7 +8,6 @@ Steps:
 """
 from __future__ import annotations
 
-import copy
 import logging
 import time
 from typing import Any
@@ -317,7 +316,8 @@ class CSGConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # TODO: username (mobile) may not be the best unique id
         unique_id = f"CSG-{username}"
         await self.async_set_unique_id(unique_id)
-        self._abort_if_unique_id_configured()
+        if not self._reauth_entry:
+            self._abort_if_unique_id_configured()
 
     async def create_or_update_config_entry(
         self, auth_token, login_type, password, username
@@ -340,7 +340,7 @@ class CSGConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._reauth_entry:
             # reauth
             # save the old config and only update the auth related data
-            old_config = copy.deepcopy(self._reauth_entry.data)
+            old_config = dict(self._reauth_entry.data)
             data[CONF_ELE_ACCOUNTS] = old_config[CONF_ELE_ACCOUNTS]
             data[CONF_SETTINGS] = old_config[CONF_SETTINGS]
             self.hass.config_entries.async_update_entry(self._reauth_entry, data=data)
@@ -377,7 +377,6 @@ class CSGOptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
         self.all_electricity_accounts: list[CSGElectricityAccount] = []
 
     async def async_step_init(

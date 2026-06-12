@@ -842,12 +842,34 @@ class CSGClient:
             )
         return float(total_year_charge), float(total_year_kwh), by_month
 
-    def get_yesterday_kwh(self, account: CSGElectricityAccount) -> float:
-        """Get power consumption(kwh) of yesterday"""
+    def get_yesterday_kwh(self, account: CSGElectricityAccount) -> float | None:
+        """Get power consumption(kwh) of yesterday
+
+        The api returns `data: null` (-> resp_data is None) when yesterday's
+        metering data hasn't been settled yet, which is common (data usually
+        lags 1~2 days). Handle that gracefully instead of crashing on a None
+        subscript, otherwise the sensor just shows unavailable with a traceback
+        spamming the log.
+        """
         resp_data = self.api_query_day_electric_by_m_point_yesterday(
             account.area_code, account.ele_customer_id
         )
-        if resp_data["power"] is not None:
-            return float(resp_data["power"])
+        if not resp_data:
+            _LOGGER.info(
+                "Yesterday's kwh is not available yet for account %s "
+                "(api returned empty data)",
+                account.ele_customer_id,
+            )
+            return None
+        power = resp_data.get("power")
+        if power is None:
+            _LOGGER.info(
+                "Yesterday's kwh is not available yet for account %s, "
+                "response had no usable power field: %s",
+                account.ele_customer_id,
+                resp_data,
+            )
+            return None
+        return float(power)
 
     # end high-level api wrappers

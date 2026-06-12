@@ -445,6 +445,15 @@ class CSGCoordinator(DataUpdateCoordinator):
                 account.account_number,
                 result,
             )
+        elif success:
+            # fetch ok but csg hasn't settled yesterday's data yet (common,
+            # data lags 1~2 days). not an error - the latest_day_kwh sensor
+            # still reflects the most recent available day
+            yesterday_kwh = STATE_UNAVAILABLE
+            _LOGGER.debug(
+                "Yesterday's kwh not available yet for account %s",
+                account.account_number,
+            )
         else:
             yesterday_kwh = STATE_UNAVAILABLE
             _LOGGER.error(

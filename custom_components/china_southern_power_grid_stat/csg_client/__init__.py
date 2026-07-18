@@ -20,7 +20,58 @@ import requests
 from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 
-from .const import *
+from .const import (
+    AREACODE_FALLBACK,
+    ATTR_ACCOUNT_NUMBER,
+    ATTR_ADDRESS,
+    ATTR_AREA_CODE,
+    ATTR_AUTH_TOKEN,
+    ATTR_ELE_CUSTOMER_ID,
+    ATTR_METERING_POINT_ID,
+    ATTR_METERING_POINT_NUMBER,
+    ATTR_USER_NAME,
+    BASE_PATH_APP,
+    BASE_PATH_WEB,
+    CREDENTIAL_PUBKEY,
+    HEADER_CUST_NUMBER,
+    HEADER_X_AUTH_TOKEN,
+    JSON_KEY_ACCT_ID,
+    JSON_KEY_AREA_CODE,
+    JSON_KEY_CRED_TYPE,
+    JSON_KEY_CUST_NUMBER,
+    JSON_KEY_DATA,
+    JSON_KEY_ELE_CUST_ID,
+    JSON_KEY_LOGON_CHAN,
+    JSON_KEY_MESSAGE,
+    JSON_KEY_METERING_POINT_ID,
+    JSON_KEY_METERING_POINT_NUMBER,
+    JSON_KEY_PARAM,
+    JSON_KEY_SMS_CODE,
+    JSON_KEY_STA,
+    JSON_KEY_YEAR_MONTH,
+    LOGIN_TYPE_PHONE_CODE,
+    LOGIN_TYPE_PHONE_PWD_CODE,
+    LOGON_CHANNEL_HANDHELD_HALL,
+    LoginType,
+    PARAM_IV,
+    PARAM_KEY,
+    QRCodeType,
+    REQUEST_TIMEOUT,
+    RESP_STA_LOGIN_WRONG_CREDENTIAL,
+    RESP_STA_NO_LOGIN,
+    RESP_STA_QR_NOT_SCANNED,
+    RESP_STA_SUCCESS,
+    SEND_MSG_TYPE_VERIFICATION_CODE,
+    VERIFICATION_CODE_TYPE_LOGIN,
+    WF_ATTR_CHARGE,
+    WF_ATTR_DATE,
+    WF_ATTR_KWH,
+    WF_ATTR_LADDER,
+    WF_ATTR_LADDER_REMAINING_KWH,
+    WF_ATTR_LADDER_START_DATE,
+    WF_ATTR_LADDER_TARIFF,
+    WF_ATTR_MONTH,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -244,7 +295,7 @@ class CSGClient:
             headers[HEADER_X_AUTH_TOKEN] = self.auth_token
             headers[HEADER_CUST_NUMBER] = self.customer_number
         if method == "POST":
-            response = self._session.post(url, json=payload, headers=headers)
+            response = self._session.post(url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
             if response.status_code != 200:
                 _LOGGER.error(
                     "API call %s returned status code %d", path, response.status_code

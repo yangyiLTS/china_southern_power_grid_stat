@@ -2,6 +2,10 @@
 
 from enum import Enum
 
+# Request timeout in seconds for all HTTP calls to the CSG API.
+# Prevents the HA thread pool from being exhausted by hung connections.
+REQUEST_TIMEOUT = 30
+
 BASE_PATH_WEB = "https://95598.csg.cn/ucs/ma/wt/"
 BASE_PATH_APP = "https://95598.csg.cn/ucs/ma/zt/"
 

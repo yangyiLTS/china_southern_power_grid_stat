@@ -13,20 +13,18 @@ from homeassistant.helpers import entity_registry
 from homeassistant.helpers.device_registry import DeviceEntry
 
 from .const import (
+    CONF_API_PROFILE,
     CONF_AUTH_TOKEN,
     CONF_ELE_ACCOUNTS,
     CONF_LOGIN_TYPE,
     CONF_UPDATED_AT,
     DOMAIN,
+    redact_identifier,
 )
 from .csg_client import (
-    CSGAPIError,
     CSGClient,
-    CSGElectricityAccount,
-    InvalidCredentials,
-    NotLoggedIn,
+    api_profile_for_login_type,
 )
-from .sensor import CSGCostSensor, CSGEnergySensor
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
@@ -40,6 +38,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = CSGClient.load(
         {
             CONF_AUTH_TOKEN: entry.data[CONF_AUTH_TOKEN],
+            CONF_API_PROFILE: entry.data.get(
+                CONF_API_PROFILE,
+                api_profile_for_login_type(entry.data[CONF_LOGIN_TYPE]),
+            ),
         }
     )
     if not await hass.async_add_executor_job(client.verify_login):
@@ -54,9 +56,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    _LOGGER.debug(f"Unloading entry: {entry.title}")
+    _LOGGER.debug("Unloading CSG entry %s", entry.entry_id)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    _LOGGER.debug(f"Unload platforms for entry: {entry.title}, success: {unload_ok}")
+    _LOGGER.debug("Unload platforms for CSG entry, success: %s", unload_ok)
     hass.data[DOMAIN].pop(entry.entry_id)
     return True
 
@@ -65,7 +67,7 @@ async def async_remove_config_entry_device(
     hass: HomeAssistant, config_entry: ConfigEntry, device_entry: DeviceEntry
 ) -> bool:
     """Remove device"""
-    _LOGGER.info(f"removing device {device_entry.name}")
+    _LOGGER.info("Removing a CSG electricity-account device")
     account_num = list(device_entry.identifiers)[0][1]
 
     # remove entities
@@ -81,8 +83,10 @@ async def async_remove_config_entry_device(
         entity_reg.async_remove(entity_id)
 
     # update config entry
-    new_data = config_entry.data.copy()
-    new_data[CONF_ELE_ACCOUNTS].pop(account_num)
+    new_data = dict(config_entry.data)
+    new_accounts = dict(new_data[CONF_ELE_ACCOUNTS])
+    new_accounts.pop(account_num)
+    new_data[CONF_ELE_ACCOUNTS] = new_accounts
     new_data[CONF_UPDATED_AT] = str(int(time.time() * 1000))
     hass.config_entries.async_update_entry(
         config_entry,
@@ -90,25 +94,35 @@ async def async_remove_config_entry_device(
     )
     _LOGGER.info(
         "Removed ele account from %s: %s",
-        config_entry.data[CONF_USERNAME],
-        account_num,
+        redact_identifier(config_entry.data[CONF_USERNAME]),
+        redact_identifier(account_num),
     )
     return True
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle removal of an entry."""
-    _LOGGER.info("Removing entry: account %s", entry.data[CONF_USERNAME])
+    _LOGGER.info(
+        "Removing CSG entry for account %s",
+        redact_identifier(entry.data[CONF_USERNAME]),
+    )
 
     # logout
     def client_logout():
         client = CSGClient.load(
             {
                 CONF_AUTH_TOKEN: entry.data[CONF_AUTH_TOKEN],
+                CONF_API_PROFILE: entry.data.get(
+                    CONF_API_PROFILE,
+                    api_profile_for_login_type(entry.data[CONF_LOGIN_TYPE]),
+                ),
             }
         )
         if client.verify_login():
             client.logout(entry.data[CONF_LOGIN_TYPE])
-            _LOGGER.info("CSG account %s logged out", entry.data[CONF_USERNAME])
+            _LOGGER.info(
+                "CSG account %s logged out",
+                redact_identifier(entry.data[CONF_USERNAME]),
+            )
 
     await hass.async_add_executor_job(client_logout)

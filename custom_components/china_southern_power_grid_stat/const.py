@@ -11,6 +11,7 @@ DOMAIN = "china_southern_power_grid_stat"
 CONF_ACCOUNT_NUMBER = "account_number"
 CONF_LOGIN_TYPE = "login_type"
 CONF_AUTH_TOKEN = "auth_token"
+CONF_API_PROFILE = "api_profile"
 # electricity accounts
 CONF_ELE_ACCOUNTS = "accounts"
 CONF_UPDATE_INTERVAL = "update_interval"
@@ -92,3 +93,11 @@ SETTING_LAST_YEAR_UPDATE_DAY_THRESHOLD = 7
 
 # defaults
 DEFAULT_UPDATE_INTERVAL = timedelta(hours=4).seconds
+
+
+def redact_identifier(value: object) -> str:
+    """Mask account-like identifiers before writing them to logs."""
+    text = str(value or "")
+    if len(text) <= 4:
+        return "****"
+    return f"{text[0]}***{text[-2:]}"

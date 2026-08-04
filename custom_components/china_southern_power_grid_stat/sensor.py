@@ -35,8 +35,10 @@ from .const import (
     ATTR_KEY_LATEST_DAY_DATE,
     ATTR_KEY_THIS_MONTH_BY_DAY,
     ATTR_KEY_THIS_YEAR_BY_MONTH,
+    CONF_API_PROFILE,
     CONF_AUTH_TOKEN,
     CONF_ELE_ACCOUNTS,
+    CONF_LOGIN_TYPE,
     CONF_SETTINGS,
     CONF_UPDATE_INTERVAL,
     DATA_KEY_LAST_UPDATE_DAY,
@@ -61,6 +63,7 @@ from .const import (
     SUFFIX_THIS_YEAR_COST,
     SUFFIX_THIS_YEAR_KWH,
     SUFFIX_YESTERDAY_KWH,
+    redact_identifier,
 )
 from .csg_client import (
     JSON_KEY_METERING_POINT_NUMBER,
@@ -75,6 +78,7 @@ from .csg_client import (
     CSGClient,
     CSGElectricityAccount,
     NotLoggedIn,
+    api_profile_for_login_type,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -192,12 +196,12 @@ async def async_setup_entry(
         all_sensors.extend(sensors)
 
     async_add_entities(all_sensors)
-    _LOGGER.debug(f"created {len(all_sensors)} sensors for config {config_entry.title}")
+    _LOGGER.debug("Created %d CSG sensors", len(all_sensors))
     # Schedule the first update to run in the background
     config_entry.async_create_task(
         hass,
         coordinator.async_config_entry_first_refresh(),
-        f"{config_entry.title}_first_update",
+        f"{config_entry.entry_id}_first_update",
     )
 
 
@@ -236,6 +240,11 @@ class CSGBaseSensor(
         return False
 
     @property
+    def _log_id(self) -> str:
+        """Return a non-sensitive sensor identifier for diagnostics."""
+        return self._entity_suffix
+
+    @property
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
         return DeviceInfo(
@@ -256,7 +265,7 @@ class CSGBaseSensor(
         if not self._coordinator.data:
             _LOGGER.error(
                 "%s coordinator has no data",
-                self.unique_id,
+                self._log_id,
             )
             self._attr_available = False
             self.async_write_ha_state()
@@ -264,20 +273,20 @@ class CSGBaseSensor(
 
         account_data = self._coordinator.data.get(self._account_number)
         if account_data is None:
-            _LOGGER.warning("%s not found in coordinator data", self.unique_id)
+            _LOGGER.warning("%s not found in coordinator data", self._log_id)
             self._attr_available = False
             self.async_write_ha_state()
             return
 
         new_native_value = account_data.get(self._entity_suffix)
         if new_native_value is None:
-            _LOGGER.warning("%s data not found in coordinator data", self.unique_id)
+            _LOGGER.warning("%s data not found in coordinator data", self._log_id)
             self._attr_available = False
             self.async_write_ha_state()
             return
 
         if new_native_value == STATE_UNAVAILABLE:
-            _LOGGER.debug("%s data is unavailable", self.unique_id)
+            _LOGGER.debug("%s data is unavailable", self._log_id)
             self.async_write_ha_state()
             self._attr_available = False
             return
@@ -287,7 +296,7 @@ class CSGBaseSensor(
 
         if new_native_value == STATE_UPDATE_UNCHANGED:
             # no update for this sensor, skip
-            _LOGGER.debug("%s doesn't need to be updated, skip", self.unique_id)
+            _LOGGER.debug("%s doesn't need to be updated, skip", self._log_id)
             return
 
         # from this point, `new_native_value` is a true value
@@ -299,11 +308,11 @@ class CSGBaseSensor(
                 new_attributes = {}
                 _LOGGER.warning(
                     "%s attribute %s not found in coordinator data",
-                    self.unique_id,
+                    self._log_id,
                     self._extra_state_attributes_key,
                 )
             self._attr_extra_state_attributes = new_attributes
-        _LOGGER.debug("%s state update done!", self.unique_id)
+        _LOGGER.debug("%s state update done", self._log_id)
         self.async_write_ha_state()
 
 
@@ -342,7 +351,7 @@ class CSGCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             # Name of the data. For logging purposes.
-            name=f"CSG Account {self._config[CONF_USERNAME]}",
+            name=f"CSG Account {self._config_entry_id}",
             # Polling interval. Will only be polled if there are subscribers.
             update_interval=timedelta(
                 seconds=self._config[CONF_SETTINGS][CONF_UPDATE_INTERVAL]
@@ -368,16 +377,26 @@ class CSGCoordinator(DataUpdateCoordinator):
             CSGClient.load,
             {
                 CONF_AUTH_TOKEN: self._config[CONF_AUTH_TOKEN],
+                CONF_API_PROFILE: self._config.get(
+                    CONF_API_PROFILE,
+                    api_profile_for_login_type(self._config[CONF_LOGIN_TYPE]),
+                ),
             },
         )
         logged_in = await self.hass.async_add_executor_job(
             self._client.verify_login,
         )
         if not logged_in:
-            _LOGGER.warning(f"{self._config[CONF_USERNAME]}: Login expired")
+            _LOGGER.warning(
+                "%s: Login expired",
+                redact_identifier(self._config[CONF_USERNAME]),
+            )
             raise ConfigEntryAuthFailed("Login expired")
 
-        _LOGGER.debug(f"{self._config[CONF_USERNAME]}: Session still valid")
+        _LOGGER.debug(
+            "%s: Session still valid",
+            redact_identifier(self._config[CONF_USERNAME]),
+        )
         await self.hass.async_add_executor_job(self._client.initialize)
 
     async def _async_fetch(self, func: callable, *args, **kwargs) -> (bool, tuple):
@@ -418,15 +437,14 @@ class CSGCoordinator(DataUpdateCoordinator):
         if success:
             balance, arrears = result
             _LOGGER.debug(
-                "Updated balance and arrears for account %s: %s",
-                account.account_number,
-                result,
+                "Updated balance and arrears for account %s",
+                redact_identifier(account.account_number),
             )
         else:
             balance, arrears = STATE_UNAVAILABLE, STATE_UNAVAILABLE
             _LOGGER.error(
                 "Error updating balance and arrears for account %s: %s",
-                account.account_number,
+                redact_identifier(account.account_number),
                 result,
             )
         self._gathered_data[account.account_number][SUFFIX_BAL] = balance
@@ -441,9 +459,8 @@ class CSGCoordinator(DataUpdateCoordinator):
         if success and result is not None:
             yesterday_kwh = result
             _LOGGER.debug(
-                "Updated yesterday's kwh for account %s: %s",
-                account.account_number,
-                result,
+                "Updated yesterday's kwh for account %s",
+                redact_identifier(account.account_number),
             )
         elif success:
             # fetch ok but csg hasn't settled yesterday's data yet (common,
@@ -452,13 +469,13 @@ class CSGCoordinator(DataUpdateCoordinator):
             yesterday_kwh = STATE_UNAVAILABLE
             _LOGGER.debug(
                 "Yesterday's kwh not available yet for account %s",
-                account.account_number,
+                redact_identifier(account.account_number),
             )
         else:
             yesterday_kwh = STATE_UNAVAILABLE
             _LOGGER.error(
                 "Error updating yesterday's kwh for account %s: %s",
-                account.account_number,
+                redact_identifier(account.account_number),
                 result,
             )
         self._gathered_data[account.account_number][
@@ -478,14 +495,13 @@ class CSGCoordinator(DataUpdateCoordinator):
             ) = result
 
             _LOGGER.debug(
-                "Updated this year's data for account %s: %s",
-                account.account_number,
-                result,
+                "Updated this year's data for account %s",
+                redact_identifier(account.account_number),
             )
         else:
             _LOGGER.error(
                 "Error updating this year's data for account %s: %s",
-                account.account_number,
+                redact_identifier(account.account_number),
                 result,
             )
             this_year_cost, this_year_kwh, this_year_by_month = (
@@ -517,7 +533,7 @@ class CSGCoordinator(DataUpdateCoordinator):
             }
             _LOGGER.debug(
                 "Last year's data for account %s: no need to update",
-                account.account_number,
+                redact_identifier(account.account_number),
             )
             return
         success, result = await self._async_fetch(
@@ -531,14 +547,13 @@ class CSGCoordinator(DataUpdateCoordinator):
             ) = result
 
             _LOGGER.debug(
-                "Updated last year's data for account %s: %s",
-                account.account_number,
-                result,
+                "Updated last year's data for account %s",
+                redact_identifier(account.account_number),
             )
         else:
             _LOGGER.error(
                 "Error updating last year's data for account %s: %s",
-                account.account_number,
+                redact_identifier(account.account_number),
                 result,
             )
             last_year_cost, last_year_kwh, last_year_by_month = (
@@ -556,88 +571,26 @@ class CSGCoordinator(DataUpdateCoordinator):
             ATTR_KEY_LAST_YEAR_BY_MONTH: last_year_by_month
         }
 
-    @staticmethod
-    def merge_by_day_data(
-        by_day_from_cost: list | str,
-        kwh_from_cost: float | str,
-        by_day_from_usage: list | str,
-        kwh_from_usage: float | str,
-    ) -> (list | str, float | str):
-        """Merge by_day_from_usage and by_day_from_cost data"""
-        # merge by_day
-        # determine which is the latest
-        if (
-            by_day_from_cost == STATE_UNAVAILABLE
-            and by_day_from_usage == STATE_UNAVAILABLE
-        ):
-            by_day = STATE_UNAVAILABLE
-        elif by_day_from_cost == STATE_UNAVAILABLE:
-            by_day = by_day_from_usage
-        elif by_day_from_usage == STATE_UNAVAILABLE:
-            by_day = by_day_from_cost
-        else:
-            # both are available
-            if len(by_day_from_cost) >= len(by_day_from_usage):
-                # the result from daily cost is newer
-                by_day = by_day_from_cost
-            else:
-                # the result from daily usage is newer
-                # but since the result from daily cost contains cost data, need to merge them
-                by_day = by_day_from_usage
-                for idx, item in enumerate(by_day_from_cost):
-                    by_day[idx][WF_ATTR_CHARGE] = item[WF_ATTR_CHARGE]
-
-        # determine which one to use as kwh
-        if kwh_from_cost == STATE_UNAVAILABLE and kwh_from_usage == STATE_UNAVAILABLE:
-            kwh = STATE_UNAVAILABLE
-        elif kwh_from_cost == STATE_UNAVAILABLE:
-            kwh = kwh_from_usage
-        elif kwh_from_usage == STATE_UNAVAILABLE:
-            kwh = kwh_from_cost
-        else:
-            # determine which kwh is the latest
-            # get the larger one
-            kwh = max(kwh_from_cost, kwh_from_usage)
-        return by_day, kwh
-
     async def _async_update_this_month_stats_and_ladder(
         self, account: CSGElectricityAccount
     ):
         """Update this month's usage, cost and ladder"""
-        # fetch usage and cost in parallel
-        task_fetch_usage = asyncio.create_task(
-            self._async_fetch(
-                self._client.get_month_daily_usage_detail, account, self._this_month_ym
-            )
+        success, result = await self._async_fetch(
+            self._client.get_month_daily_detail,
+            account,
+            self._this_month_ym,
         )
-        task_fetch_cost = asyncio.create_task(
-            self._async_fetch(
-                self._client.get_month_daily_cost_detail, account, self._this_month_ym
-            )
-        )
-
-        results = await asyncio.gather(task_fetch_usage, task_fetch_cost)
-
-        (success_usage, result_usage), (success_cost, result_cost) = results
-
-        if success_usage:
-            this_month_kwh_from_usage, this_month_by_day_from_usage = result_usage
-        else:
-            this_month_kwh_from_usage = STATE_UNAVAILABLE
-            this_month_by_day_from_usage = STATE_UNAVAILABLE
-
-        if success_cost:
+        if success:
             (
                 this_month_cost,
-                this_month_kwh_from_cost,
+                this_month_kwh,
                 ladder,
-                this_month_by_day_from_cost,
-            ) = result_cost
-            # special processing
+                this_month_by_day,
+            ) = result
             if this_month_cost is None:
                 this_month_cost = STATE_UNAVAILABLE
-            if this_month_kwh_from_cost is None:
-                this_month_kwh_from_cost = STATE_UNAVAILABLE
+            if this_month_kwh is None:
+                this_month_kwh = STATE_UNAVAILABLE
             ladder_stage = (
                 ladder[WF_ATTR_LADDER]
                 if ladder[WF_ATTR_LADDER] is not None
@@ -661,8 +614,8 @@ class CSGCoordinator(DataUpdateCoordinator):
         else:
             (
                 this_month_cost,
-                this_month_kwh_from_cost,
-                this_month_by_day_from_cost,
+                this_month_kwh,
+                this_month_by_day,
                 ladder_stage,
                 ladder_remaining_kwh,
                 ladder_tariff,
@@ -676,14 +629,8 @@ class CSGCoordinator(DataUpdateCoordinator):
                 STATE_UNAVAILABLE,
                 STATE_UNAVAILABLE,
             )
-        this_month_by_day, this_month_kwh = self.merge_by_day_data(
-            by_day_from_usage=this_month_by_day_from_usage,
-            kwh_from_usage=this_month_kwh_from_usage,
-            by_day_from_cost=this_month_by_day_from_cost,
-            kwh_from_cost=this_month_kwh_from_cost,
-        )
 
-        if this_month_by_day == STATE_UNAVAILABLE:
+        if not this_month_by_day or this_month_by_day == STATE_UNAVAILABLE:
             # need last month's data to update `latest_day` entity
             self._if_update_last_month = True
 
@@ -723,7 +670,7 @@ class CSGCoordinator(DataUpdateCoordinator):
                 # don't need last month's data for latest day
                 _LOGGER.debug(
                     "Last month's data for account %s: no need to update",
-                    account.account_number,
+                    redact_identifier(account.account_number),
                 )
                 self._gathered_data[account.account_number][
                     SUFFIX_LAST_MONTH_KWH
@@ -736,62 +683,33 @@ class CSGCoordinator(DataUpdateCoordinator):
                 ] = {ATTR_KEY_LAST_MONTH_BY_DAY: STATE_UPDATE_UNCHANGED}
                 return
 
-        # continue to update last month's data
-        # fetch usage and cost in parallel
-        task_fetch_usage = asyncio.create_task(
-            self._async_fetch(
-                self._client.get_month_daily_usage_detail, account, self._last_month_ym
-            )
+        # continue to update last month's data through the maintained combined API
+        success, result = await self._async_fetch(
+            self._client.get_month_daily_detail,
+            account,
+            self._last_month_ym,
         )
-        task_fetch_cost = asyncio.create_task(
-            self._async_fetch(
-                self._client.get_month_daily_cost_detail, account, self._last_month_ym
-            )
-        )
-
-        results = await asyncio.gather(task_fetch_usage, task_fetch_cost)
-
-        (success_usage, result_usage), (success_cost, result_cost) = results
-
-        if success_usage:
-            last_month_kwh_from_usage, last_month_by_day_from_usage = result_usage
-        else:
-            last_month_kwh_from_usage = STATE_UNAVAILABLE
-            last_month_by_day_from_usage = STATE_UNAVAILABLE
-
-        if success_cost:
+        if success:
             (
                 last_month_cost,
-                last_month_kwh_from_cost,
+                last_month_kwh,
                 _,  # ladder is discarded
-                last_month_by_day_from_cost,
-            ) = result_cost
-
-            # for last month, it's safe to calculate total kwh from cost
-            if not last_month_cost:
-                last_month_cost = sum(
-                    d[WF_ATTR_CHARGE] for d in last_month_by_day_from_cost
-                )
-            if not last_month_kwh_from_cost:
-                last_month_kwh_from_cost = sum(
-                    d[WF_ATTR_KWH] for d in last_month_by_day_from_cost
-                )
+                last_month_by_day,
+            ) = result
+            if last_month_cost is None:
+                last_month_cost = STATE_UNAVAILABLE
+            if last_month_kwh is None:
+                last_month_kwh = STATE_UNAVAILABLE
         else:
             (
                 last_month_cost,
-                last_month_kwh_from_cost,
-                last_month_by_day_from_cost,
+                last_month_kwh,
+                last_month_by_day,
             ) = (
                 STATE_UNAVAILABLE,
                 STATE_UNAVAILABLE,
                 STATE_UNAVAILABLE,
             )
-        last_month_by_day, last_month_kwh = self.merge_by_day_data(
-            by_day_from_usage=last_month_by_day_from_usage,
-            kwh_from_usage=last_month_kwh_from_usage,
-            by_day_from_cost=last_month_by_day_from_cost,
-            kwh_from_cost=last_month_kwh_from_cost,
-        )
 
         self._gathered_data[account.account_number][
             SUFFIX_LAST_MONTH_KWH
@@ -843,7 +761,7 @@ class CSGCoordinator(DataUpdateCoordinator):
                 else:
                     _LOGGER.error(
                         "Ele account %s, no latest day data available",
-                        account.account_number,
+                        redact_identifier(account.account_number),
                     )
                     latest_day_kwh = STATE_UNAVAILABLE
                     latest_day_cost = STATE_UNAVAILABLE
@@ -900,7 +818,7 @@ class CSGCoordinator(DataUpdateCoordinator):
             update_last_year = True
             _LOGGER.debug(
                 "First update for account %s, getting all past data",
-                self._config[CONF_USERNAME],
+                redact_identifier(self._config[CONF_USERNAME]),
             )
         else:
             update_last_month = False
@@ -945,13 +863,13 @@ class CSGCoordinator(DataUpdateCoordinator):
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.error(
                 "Ele account %s, update latest day data failed: %s",
-                account.account_number,
+                redact_identifier(account.account_number),
                 exc,
             )
 
         _LOGGER.debug(
             "Ele account %s, update took %s seconds",
-            account.account_number,
+            redact_identifier(account.account_number),
             time.time() - start_time,
         )
 
@@ -972,7 +890,9 @@ class CSGCoordinator(DataUpdateCoordinator):
         metering_point_data = {}
         config_entry_need_update = False
         await self._async_refresh_client()
-        new_config = self._config.copy()
+        new_config = dict(self._config)
+        new_accounts = dict(new_config[CONF_ELE_ACCOUNTS])
+        new_config[CONF_ELE_ACCOUNTS] = new_accounts
         for account_number, account_data in self._config[CONF_ELE_ACCOUNTS].items():
             self._gathered_data[account_number] = {}
             account = CSGElectricityAccount.load(account_data)
@@ -993,9 +913,7 @@ class CSGCoordinator(DataUpdateCoordinator):
                             account.metering_point_number = mp[
                                 JSON_KEY_METERING_POINT_NUMBER
                             ]
-                            new_config[CONF_ELE_ACCOUNTS][
-                                account_number
-                            ] = account.dump()
+                            new_accounts[account_number] = account.dump()
                             break
 
             await self._async_update_account_data(account)

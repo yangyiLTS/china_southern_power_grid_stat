@@ -21,16 +21,21 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 
 from .const import (
+    ALLOWED_BASE_PATHS,
+    API_PROFILE_APP,
+    API_PROFILE_TO_BASE_PATH,
+    API_PROFILE_WEB,
     AREACODE_FALLBACK,
     ATTR_ACCOUNT_NUMBER,
     ATTR_ADDRESS,
+    ATTR_API_PROFILE,
     ATTR_AREA_CODE,
     ATTR_AUTH_TOKEN,
     ATTR_ELE_CUSTOMER_ID,
     ATTR_METERING_POINT_ID,
     ATTR_METERING_POINT_NUMBER,
     ATTR_USER_NAME,
-    BASE_PATH_APP,
+    BASE_PATH_QR_NEW,
     BASE_PATH_WEB,
     CREDENTIAL_PUBKEY,
     HEADER_CUST_NUMBER,
@@ -51,15 +56,18 @@ from .const import (
     JSON_KEY_YEAR_MONTH,
     LOGIN_TYPE_PHONE_CODE,
     LOGIN_TYPE_PHONE_PWD_CODE,
+    LOGIN_TYPE_TO_QR_CODE_TYPE,
     LOGON_CHANNEL_HANDHELD_HALL,
-    LoginType,
-    PARAM_IV,
-    PARAM_KEY,
-    QRCodeType,
+    LOGON_CHANNEL_ONLINE_HALL,
+    PARAM_IV_APP,
+    PARAM_IV_WEB,
+    PARAM_KEY_APP,
+    PARAM_KEY_WEB,
     REQUEST_TIMEOUT,
     RESP_STA_LOGIN_WRONG_CREDENTIAL,
     RESP_STA_NO_LOGIN,
     RESP_STA_QR_NOT_SCANNED,
+    RESP_STA_QR_TIMEOUT,
     RESP_STA_SUCCESS,
     SEND_MSG_TYPE_VERIFICATION_CODE,
     VERIFICATION_CODE_TYPE_LOGIN,
@@ -71,6 +79,10 @@ from .const import (
     WF_ATTR_LADDER_START_DATE,
     WF_ATTR_LADDER_TARIFF,
     WF_ATTR_MONTH,
+    LoginType,
+)
+from .const import (
+    api_profile_for_login_type as api_profile_for_login_type,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -135,9 +147,13 @@ def encrypt_credential(password: str) -> str:
     return b64encode(encrypted_pwd).decode()
 
 
-def encrypt_params(params: dict) -> str:
-    """Decrypt response message using AES with KEY, IV"""
-    json_cipher = AES.new(PARAM_KEY, AES.MODE_CBC, PARAM_IV)
+def encrypt_params(
+    params: dict,
+    key: bytes = PARAM_KEY_APP,
+    iv: bytes = PARAM_IV_APP,
+) -> str:
+    """Encrypt a request payload using the selected API profile material."""
+    json_cipher = AES.new(key, AES.MODE_CBC, iv)
 
     def pad(content: str) -> str:
         return content + (16 - len(content) % 16) * "\x00"
@@ -147,9 +163,13 @@ def encrypt_params(params: dict) -> str:
     return b64encode(encrypted).decode()
 
 
-def decrypt_params(encrypted: str) -> dict:
-    """Encrypt request message using AES with KEY, IV"""
-    json_cipher = AES.new(PARAM_KEY, AES.MODE_CBC, PARAM_IV)
+def decrypt_params(
+    encrypted: str,
+    key: bytes = PARAM_KEY_APP,
+    iv: bytes = PARAM_IV_APP,
+) -> dict:
+    """Decrypt a response payload using the selected API profile material."""
+    json_cipher = AES.new(key, AES.MODE_CBC, iv)
     decrypted = json_cipher.decrypt(b64decode(encrypted))
     # remove padding
     params = json.loads(decrypted.decode().strip("\x00"))
@@ -244,12 +264,21 @@ class CSGClient:
     def __init__(
         self,
         auth_token: str | None = None,
+        api_profile: str = API_PROFILE_APP,
     ) -> None:
+        if api_profile not in API_PROFILE_TO_BASE_PATH:
+            raise ValueError(f"Unsupported API profile: {api_profile}")
         self._session: requests.Session = requests.Session()
+        self.api_profile = api_profile
+        self._api_base_path = API_PROFILE_TO_BASE_PATH[api_profile]
         self._common_headers = {
             "Host": "95598.csg.cn",
             "Content-Type": "application/json;charset=utf-8",
-            "Origin": "file://",
+            "Origin": (
+                "https://95598.csg.cn"
+                if self._api_base_path == BASE_PATH_WEB
+                else "file://"
+            ),
             HEADER_X_AUTH_TOKEN: "",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
@@ -273,20 +302,24 @@ class CSGClient:
         with_auth: bool = True,
         method: str = "POST",
         custom_headers: dict | None = None,
-        base_path: str = BASE_PATH_APP,
+        base_path: str | None = None,
+        encrypt_payload: bool = False,
     ):
         """
         Function to make the http request to api endpoints
         can automatically add authentication header(s)
         """
+        resolved_base_path = base_path or self._api_base_path
+        if resolved_base_path not in ALLOWED_BASE_PATHS:
+            raise ValueError("Refusing request to an untrusted API base path")
         _LOGGER.debug(
-            "_make_request: %s, data=%s, auth=%s, method=%s",
+            "CSG API request path=%s profile=%s auth=%s method=%s",
             path,
-            payload,
+            self.api_profile,
             with_auth,
             method,
         )
-        url = base_path + path
+        url = resolved_base_path + path
         headers = copy(self._common_headers)
         if custom_headers:
             for _k, _v in custom_headers.items():
@@ -294,8 +327,17 @@ class CSGClient:
         if with_auth:
             headers[HEADER_X_AUTH_TOKEN] = self.auth_token
             headers[HEADER_CUST_NUMBER] = self.customer_number
+        if encrypt_payload:
+            key, iv = self._crypto_material()
+            payload = {JSON_KEY_PARAM: encrypt_params(payload or {}, key, iv)}
+            headers["need-crypto"] = "true"
         if method == "POST":
-            response = self._session.post(url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = self._session.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
             if response.status_code != 200:
                 _LOGGER.error(
                     "API call %s returned status code %d", path, response.status_code
@@ -306,10 +348,18 @@ class CSGClient:
             json_str = json_str[json_str.find("{") : json_str.rfind("}") + 1]
             json_data = json.loads(json_str)
             response_data = json_data
+            if (
+                response.headers.get("need-decrypto")
+                and isinstance(response_data.get(JSON_KEY_DATA), str)
+            ):
+                key, iv = self._crypto_material()
+                response_data[JSON_KEY_DATA] = decrypt_params(
+                    response_data[JSON_KEY_DATA], key, iv
+                )
             _LOGGER.debug(
-                "_make_request: %s, response: %s",
+                "CSG API response path=%s status=%s",
                 path,
-                json.dumps(response_data, ensure_ascii=False),
+                response_data.get(JSON_KEY_STA),
             )
 
             # headers need to be returned since they may contain additional data
@@ -317,13 +367,18 @@ class CSGClient:
 
         raise NotImplementedError()
 
+    def _crypto_material(self) -> tuple[bytes, bytes]:
+        """Return crypto material for the authenticated API channel."""
+        if self.api_profile == API_PROFILE_WEB:
+            return PARAM_KEY_WEB, PARAM_IV_WEB
+        return PARAM_KEY_APP, PARAM_IV_APP
+
     def _handle_unsuccessful_response(self, api_path: str, response_data: dict):
         """Handles sta=!RESP_STA_SUCCESS"""
         _LOGGER.debug(
-            "Account customer number: %s, unsuccessful response while calling %s: %s",
-            self.customer_number,
+            "CSG API unsuccessful path=%s status=%s",
             api_path,
-            response_data,
+            response_data.get(JSON_KEY_STA),
         )
 
         if response_data[JSON_KEY_STA] == RESP_STA_NO_LOGIN:
@@ -354,42 +409,82 @@ class CSGClient:
         self._handle_unsuccessful_response(path, resp_data)
 
     def api_create_login_qr_code(
-        self, channel: QRCodeType, login_id: str | None = None
-    ) -> (str, str):
+        self, login_type: LoginType, login_id: str | None = None
+    ) -> tuple[str, str]:
         """Request API to create a QR code for login
         Returns login_id and link to QR code image
         """
-        path = "center/createLoginQrcode"
-
+        login_type = LoginType(login_type)
+        channel = LOGIN_TYPE_TO_QR_CODE_TYPE[login_type]
         login_id = login_id or generate_qr_login_id()
-        payload = {
-            JSON_KEY_AREA_CODE: AREACODE_FALLBACK,
-            "channel": channel,
-            # NOTE: this spell error is intentional
-            "lgoinId": login_id,
-        }
+        custom_headers = None
+        if login_type == LoginType.LOGIN_TYPE_WX_QR:
+            path = "center/createLoginQrcode"
+            base_path = BASE_PATH_WEB
+            payload = {
+                JSON_KEY_AREA_CODE: AREACODE_FALLBACK,
+                "channel": channel,
+                "channelCode": LOGON_CHANNEL_HANDHELD_HALL,
+                # NOTE: this spelling error is required by the legacy endpoint.
+                "lgoinId": login_id,
+            }
+        else:
+            path = "user/manage/createLoginQrcode"
+            base_path = BASE_PATH_QR_NEW
+            payload = {
+                "channel": channel,
+                "channelCode": LOGON_CHANNEL_HANDHELD_HALL,
+                "loginId": login_id,
+            }
+            custom_headers = {"channelCode": LOGON_CHANNEL_ONLINE_HALL}
         _, resp_data = self._make_request(
-            path, payload, with_auth=False, base_path=BASE_PATH_WEB
+            path,
+            payload,
+            with_auth=False,
+            custom_headers=custom_headers,
+            base_path=base_path,
         )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return login_id, resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
 
-    def api_get_qr_login_status(self, login_id: str) -> (bool, str):
+    def api_get_qr_login_status(
+        self, login_id: str, login_type: LoginType
+    ) -> tuple[bool, str]:
         """Get login status of the QR code"""
-        path = "center/getLoginInfo"
-        payload = {
-            JSON_KEY_AREA_CODE: AREACODE_FALLBACK,
-            # this one is the correct spelling
-            "loginId": login_id,
-        }
+        login_type = LoginType(login_type)
+        custom_headers = None
+        if login_type == LoginType.LOGIN_TYPE_WX_QR:
+            path = "center/getLoginInfo"
+            base_path = BASE_PATH_WEB
+            payload = {
+                JSON_KEY_AREA_CODE: AREACODE_FALLBACK,
+                "loginId": login_id,
+            }
+        else:
+            path = "user/manage/getLoginInfo"
+            base_path = BASE_PATH_QR_NEW
+            payload = {
+                "channelCode": LOGON_CHANNEL_HANDHELD_HALL,
+                "loginId": login_id,
+            }
+            custom_headers = {"channelCode": LOGON_CHANNEL_ONLINE_HALL}
         resp_header, resp_data = self._make_request(
-            path, payload, with_auth=False, base_path=BASE_PATH_WEB
+            path,
+            payload,
+            with_auth=False,
+            custom_headers=custom_headers,
+            base_path=base_path,
         )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
-            return True, resp_header[HEADER_X_AUTH_TOKEN]
+            auth_token = resp_header.get(HEADER_X_AUTH_TOKEN)
+            if not auth_token:
+                raise CSGAPIError("missing_auth_token", "Login response had no token")
+            return True, auth_token
         if resp_data[JSON_KEY_STA] == RESP_STA_QR_NOT_SCANNED:
             return False, ""
+        if resp_data[JSON_KEY_STA] == RESP_STA_QR_TIMEOUT:
+            raise QrCodeExpired()
         self._handle_unsuccessful_response(path, resp_data)
 
     def api_login_with_sms_code(self, phone_no: str, sms_code: str):
@@ -439,8 +534,12 @@ class CSGClient:
     def api_query_authentication_result(self) -> dict[str, Any]:
         """Contains custNumber, used to verify login"""
         path = "user/queryAuthenticationResult"
-        payload = None
-        _, resp_data = self._make_request(path, payload)
+        payload = {}
+        _, resp_data = self._make_request(
+            path,
+            payload,
+            encrypt_payload=self.api_profile == API_PROFILE_WEB,
+        )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
@@ -448,8 +547,12 @@ class CSGClient:
     def api_get_user_info(self) -> dict[str, Any]:
         """Get account info"""
         path = "user/getUserInfo"
-        payload = None
-        _, resp_data = self._make_request(path, payload)
+        payload = {}
+        _, resp_data = self._make_request(
+            path,
+            payload,
+            encrypt_payload=self.api_profile == API_PROFILE_WEB,
+        )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
@@ -480,7 +583,12 @@ class CSGClient:
         }
         # custom_headers = {"funid": "100t002"}
         custom_headers = {}
-        _, resp_data = self._make_request(path, payload, custom_headers=custom_headers)
+        _, resp_data = self._make_request(
+            path,
+            payload,
+            custom_headers=custom_headers,
+            encrypt_payload=self.api_profile == API_PROFILE_WEB,
+        )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
@@ -503,34 +611,12 @@ class CSGClient:
         }
         # custom_headers = {"funid": "100t002"}
         custom_headers = {}
-        _, resp_data = self._make_request(path, payload, custom_headers=custom_headers)
-        if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
-            return resp_data[JSON_KEY_DATA]
-        self._handle_unsuccessful_response(path, resp_data)
-
-    def api_query_day_electric_charge_by_m_point(
-        self,
-        year: int,
-        month: int,
-        area_code: str,
-        ele_customer_id: str,
-        metering_point_id: str,
-    ) -> dict:
-        """get charge by day in the given month
-        KNOWN BUG: this api call returns the daily cost data of year_month,
-        but the ladder data will be this month's.
-        this api call could take a long time to return (~30s)
-        """
-        path = "charge/queryDayElectricChargeByMPoint"
-        payload = {
-            JSON_KEY_AREA_CODE: area_code,
-            JSON_KEY_ELE_CUST_ID: ele_customer_id,
-            JSON_KEY_YEAR_MONTH: f"{year}{month:02d}",
-            JSON_KEY_METERING_POINT_ID: metering_point_id,
-        }
-        # custom_headers = {"funid": "100t002"}  # TODO: what does this do? region?
-        custom_headers = {}
-        _, resp_data = self._make_request(path, payload, custom_headers=custom_headers)
+        _, resp_data = self._make_request(
+            path,
+            payload,
+            custom_headers=custom_headers,
+            encrypt_payload=self.api_profile == API_PROFILE_WEB,
+        )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
@@ -583,13 +669,21 @@ class CSGClient:
         """Contains: balance and arrears"""
         path = "charge/queryUserAccountNumberSurplus"
         payload = {JSON_KEY_AREA_CODE: area_code, JSON_KEY_ELE_CUST_ID: ele_customer_id}
-        _, resp_data = self._make_request(path, payload)
+        _, resp_data = self._make_request(
+            path,
+            payload,
+            encrypt_payload=self.api_profile == API_PROFILE_WEB,
+        )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
 
     def api_get_fee_analyze_details(
-        self, year: int, area_code: str, ele_customer_id: str
+        self,
+        year: int,
+        area_code: str,
+        ele_customer_id: str,
+        metering_point_number: str | None,
     ):
         """
         Contains: year total kWh, year total charge, kWh/charge by month in current year
@@ -599,22 +693,13 @@ class CSGClient:
             JSON_KEY_AREA_CODE: area_code,
             "electricityBillYear": year,
             JSON_KEY_ELE_CUST_ID: ele_customer_id,
-            JSON_KEY_METERING_POINT_ID: None,  # this is set to null in api
+            JSON_KEY_METERING_POINT_ID: metering_point_number,
         }
-        _, resp_data = self._make_request(path, payload)
-        if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
-            return resp_data[JSON_KEY_DATA]
-        self._handle_unsuccessful_response(path, resp_data)
-
-    def api_query_day_electric_by_m_point_yesterday(
-        self,
-        area_code: str,
-        ele_customer_id: str,
-    ) -> dict:
-        """Contains: power consumption(kWh) of yesterday"""
-        path = "charge/queryDayElectricByMPointYesterday"
-        payload = {JSON_KEY_ELE_CUST_ID: ele_customer_id, JSON_KEY_AREA_CODE: area_code}
-        _, resp_data = self._make_request(path, payload)
+        _, resp_data = self._make_request(
+            path,
+            payload,
+            encrypt_payload=self.api_profile == API_PROFILE_WEB,
+        )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
@@ -629,7 +714,11 @@ class CSGClient:
             ],
             "type": _type,
         }
-        _, resp_data = self._make_request(path, payload)
+        _, resp_data = self._make_request(
+            path,
+            payload,
+            encrypt_payload=self.api_profile == API_PROFILE_WEB,
+        )
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
@@ -658,6 +747,7 @@ class CSGClient:
                 raise ValueError(f"missing parameter: {k}")
         client = CSGClient(
             auth_token=data[ATTR_AUTH_TOKEN],
+            api_profile=data.get(ATTR_API_PROFILE, API_PROFILE_APP),
         )
         return client
 
@@ -665,6 +755,7 @@ class CSGClient:
         """Dump the session to dict"""
         return {
             ATTR_AUTH_TOKEN: self.auth_token,
+            ATTR_API_PROFILE: self.api_profile,
         }
 
     def set_authentication_params(self, auth_token: str):
@@ -686,7 +777,12 @@ class CSGClient:
 
     def logout(self, login_type: LoginType):
         """Logout and reset identifier, token etc."""
-        self.api_logout(LOGON_CHANNEL_HANDHELD_HALL, login_type)
+        logon_channel = (
+            LOGON_CHANNEL_ONLINE_HALL
+            if self.api_profile == API_PROFILE_WEB
+            else LOGON_CHANNEL_HANDHELD_HALL
+        )
+        self.api_logout(logon_channel, login_type)
         self.auth_token = None
         self.customer_number = None
 
@@ -719,13 +815,18 @@ class CSGClient:
             result.append(account)
         return result
 
-    def get_month_daily_usage_detail(
+    def get_month_daily_detail(
         self, account: CSGElectricityAccount, year_month: tuple[int, int]
-    ) -> tuple[float, list[dict[str, str | float]]]:
-        """Get daily usage of current month"""
+    ) -> tuple[float | None, float | None, dict, list[dict[str, str | float]]]:
+        """Get current month totals and daily usage from the maintained endpoint.
+
+        The current web application exposes totalElectricity and totalPower from
+        queryDayElectricByMPoint. The former daily-charge endpoint was removed.
+        Daily charge is therefore included only when the maintained response
+        happens to provide it; callers must treat it as optional.
+        """
 
         year, month = year_month
-
         resp_data = self.api_query_day_electric_by_m_point(
             year,
             month,
@@ -733,80 +834,62 @@ class CSGClient:
             account.ele_customer_id,
             account.metering_point_id,
         )
-        month_total_kwh = float(resp_data["totalPower"])
+
+        def optional_float(value: Any) -> float | None:
+            return None if value in (None, "") else float(value)
+
         by_day = []
-        for d_data in resp_data["result"]:
-            by_day.append(
-                {WF_ATTR_DATE: d_data["date"], WF_ATTR_KWH: float(d_data["power"])}
-            )
+        for d_data in resp_data.get("result") or []:
+            item = {
+                WF_ATTR_DATE: d_data["date"],
+                WF_ATTR_KWH: float(d_data["power"]),
+            }
+            if d_data.get("charge") not in (None, ""):
+                item[WF_ATTR_CHARGE] = float(d_data["charge"])
+            by_day.append(item)
+
+        ladder_start_date = None
+        raw_start_date = resp_data.get("ladderEleStartDate")
+        if raw_start_date:
+            try:
+                ladder_start_date = datetime.datetime.fromisoformat(raw_start_date)
+            except ValueError:
+                _LOGGER.debug("Ignoring an unparseable ladder start date")
+
+        ladder = {
+            WF_ATTR_LADDER: (
+                int(resp_data["ladderEle"])
+                if resp_data.get("ladderEle") not in (None, "")
+                else None
+            ),
+            WF_ATTR_LADDER_START_DATE: ladder_start_date,
+            WF_ATTR_LADDER_REMAINING_KWH: optional_float(
+                resp_data.get("ladderEleSurplus")
+            ),
+            WF_ATTR_LADDER_TARIFF: optional_float(resp_data.get("ladderEleTariff")),
+        }
+
+        return (
+            optional_float(resp_data.get("totalElectricity")),
+            optional_float(resp_data.get("totalPower")),
+            ladder,
+            by_day,
+        )
+
+    def get_month_daily_usage_detail(
+        self, account: CSGElectricityAccount, year_month: tuple[int, int]
+    ) -> tuple[float | None, list[dict[str, str | float]]]:
+        """Get daily usage of a month using the maintained combined endpoint."""
+        _, month_total_kwh, _, by_day = self.get_month_daily_detail(
+            account, year_month
+        )
         return month_total_kwh, by_day
 
     def get_month_daily_cost_detail(
         self, account: CSGElectricityAccount, year_month: tuple[int, int]
     ) -> tuple[float | None, float | None, dict, list[dict[str, str | float]]]:
-        """Get daily cost of current month"""
-
-        year, month = year_month
-
-        resp_data = self.api_query_day_electric_charge_by_m_point(
-            year,
-            month,
-            account.area_code,
-            account.ele_customer_id,
-            account.metering_point_id,
-        )
-
-        by_day = []
-        for d_data in resp_data["result"]:
-            by_day.append(
-                {
-                    WF_ATTR_DATE: d_data["date"],
-                    WF_ATTR_CHARGE: float(d_data["charge"]),
-                    WF_ATTR_KWH: float(d_data["power"]),
-                }
-            )
-
-        # sometimes the data by day is present, but the total amount and ladder are not
-
-        if resp_data["totalElectricity"] is not None:
-            month_total_cost = float(resp_data["totalElectricity"])
-        else:
-            month_total_cost = None
-
-        if resp_data["totalPower"] is not None:
-            month_total_kwh = float(resp_data["totalPower"])
-        else:
-            month_total_kwh = None
-
-        # sometimes the ladder info is null, handle that
-        if resp_data["ladderEle"] is not None:
-            current_ladder = int(resp_data["ladderEle"])
-        else:
-            current_ladder = None
-        # "2023-05-01 00:00:00.0"
-        if resp_data["ladderEleStartDate"] is not None:
-            current_ladder_start_date = datetime.datetime.strptime(
-                resp_data["ladderEleStartDate"], "%Y-%m-%d %H:%M:%S.%f"
-            )
-        else:
-            current_ladder_start_date = None
-        if resp_data["ladderEleSurplus"] is not None:
-            current_ladder_remaining_kwh = float(resp_data["ladderEleSurplus"])
-        else:
-            current_ladder_remaining_kwh = None
-        if resp_data["ladderEleTariff"] is not None:
-            current_tariff = float(resp_data["ladderEleTariff"])
-        else:
-            current_tariff = None
-        # TODO what will happen to `current_ladder_remaining_kwh` when it's the last ladder?
-        ladder = {
-            WF_ATTR_LADDER: current_ladder,
-            WF_ATTR_LADDER_START_DATE: current_ladder_start_date,
-            WF_ATTR_LADDER_REMAINING_KWH: current_ladder_remaining_kwh,
-            WF_ATTR_LADDER_TARIFF: current_tariff,
-        }
-
-        return month_total_cost, month_total_kwh, ladder, by_day
+        """Get monthly cost plus any available daily cost values."""
+        return self.get_month_daily_detail(account, year_month)
 
     def get_balance_and_arrears(
         self, account: CSGElectricityAccount
@@ -816,8 +899,11 @@ class CSGClient:
         resp_data = self.api_query_account_surplus(
             account.area_code, account.ele_customer_id
         )
-        balance = resp_data[0]["balance"]
-        arrears = resp_data[0]["arrears"]
+        # The current web API returns an object; the legacy mobile API returned
+        # a one-item list. Accept both during the migration window.
+        account_data = resp_data[0] if isinstance(resp_data, list) else resp_data
+        balance = account_data["balance"]
+        arrears = account_data["arrears"]
         return float(balance), float(arrears)
 
     def get_year_month_stats(
@@ -826,7 +912,10 @@ class CSGClient:
         """Get year total kWh, year total charge, kWh/charge by month in current year"""
 
         resp_data = self.api_get_fee_analyze_details(
-            year, account.area_code, account.ele_customer_id
+            year,
+            account.area_code,
+            account.ele_customer_id,
+            account.metering_point_number,
         )
 
         total_year_kwh = resp_data["totalBillingElectricity"]
@@ -843,33 +932,20 @@ class CSGClient:
         return float(total_year_charge), float(total_year_kwh), by_month
 
     def get_yesterday_kwh(self, account: CSGElectricityAccount) -> float | None:
-        """Get power consumption(kwh) of yesterday
-
-        The api returns `data: null` (-> resp_data is None) when yesterday's
-        metering data hasn't been settled yet, which is common (data usually
-        lags 1~2 days). Handle that gracefully instead of crashing on a None
-        subscript, otherwise the sensor just shows unavailable with a traceback
-        spamming the log.
-        """
-        resp_data = self.api_query_day_electric_by_m_point_yesterday(
-            account.area_code, account.ele_customer_id
+        """Derive yesterday's usage from the maintained monthly detail API."""
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        resp_data = self.api_query_day_electric_by_m_point(
+            yesterday.year,
+            yesterday.month,
+            account.area_code,
+            account.ele_customer_id,
+            account.metering_point_id,
         )
-        if not resp_data:
-            _LOGGER.info(
-                "Yesterday's kwh is not available yet for account %s "
-                "(api returned empty data)",
-                account.ele_customer_id,
-            )
-            return None
-        power = resp_data.get("power")
-        if power is None:
-            _LOGGER.info(
-                "Yesterday's kwh is not available yet for account %s, "
-                "response had no usable power field: %s",
-                account.ele_customer_id,
-                resp_data,
-            )
-            return None
-        return float(power)
+        target_date = yesterday.isoformat()
+        for item in resp_data.get("result") or []:
+            if item.get("date") == target_date and item.get("power") not in (None, ""):
+                return float(item["power"])
+        # CSG documents a T+3 publication window, so an absent value is normal.
+        return None
 
     # end high-level api wrappers

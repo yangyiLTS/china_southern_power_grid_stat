@@ -8,10 +8,33 @@ REQUEST_TIMEOUT = 30
 
 BASE_PATH_WEB = "https://95598.csg.cn/ucs/ma/wt/"
 BASE_PATH_APP = "https://95598.csg.cn/ucs/ma/zt/"
+BASE_PATH_QR_NEW = "https://95598.csg.cn/mp/w2/wx/userauth/"
 
-# https://95598.csg.cn/js/app.1.6.177.1667607288138.js
-PARAM_KEY = "cOdHFNHUNkZrjNaN".encode("utf8")
-PARAM_IV = "oMChoRLZnTivcQyR".encode("utf8")
+API_PROFILE_APP = "app"
+API_PROFILE_WEB = "web"
+API_PROFILE_TO_BASE_PATH = {
+    API_PROFILE_APP: BASE_PATH_APP,
+    API_PROFILE_WEB: BASE_PATH_WEB,
+}
+ALLOWED_BASE_PATHS = frozenset(
+    {
+        BASE_PATH_APP,
+        BASE_PATH_WEB,
+        BASE_PATH_QR_NEW,
+    }
+)
+
+# Legacy mobile API crypto material retained for SMS-login sessions.
+# Source: https://95598.csg.cn/js/app.1.6.177.1667607288138.js
+PARAM_KEY_APP = "cOdHFNHUNkZrjNaN".encode("utf8")
+PARAM_IV_APP = "oMChoRLZnTivcQyR".encode("utf8")
+
+# Current online-hall API crypto material. The web bundle stores obfuscated
+# values and derives these 16-byte strings by reversing the underscore-delimited
+# segments, dropping the marker, then taking the first character of each part.
+# Source: https://95598.csg.cn/js/app.1.6.230.1785775124453.js
+PARAM_KEY_WEB = "zFujxJSrfmClqtKO".encode("utf8")
+PARAM_IV_WEB = "oMShoRXZnAivcCyR".encode("utf8")
 LOGON_CHANNEL_ONLINE_HALL = "3"  # web
 LOGON_CHANNEL_HANDHELD_HALL = "4"  # app
 RESP_STA_SUCCESS = "00"
@@ -45,6 +68,18 @@ LOGIN_TYPE_TO_QR_CODE_TYPE = {
     LoginType.LOGIN_TYPE_WX_QR: QRCodeType.QR_WECHAT,
     LoginType.LOGIN_TYPE_ALI_QR: QRCodeType.QR_ALIPAY,
 }
+
+
+def api_profile_for_login_type(login_type: LoginType | str) -> str:
+    """Return the API channel that owns the authenticated session."""
+    parsed_login_type = LoginType(login_type)
+    if parsed_login_type in {
+        LoginType.LOGIN_TYPE_WX_QR,
+        LoginType.LOGIN_TYPE_ALI_QR,
+        LoginType.LOGIN_TYPE_CSG_QR,
+    }:
+        return API_PROFILE_WEB
+    return API_PROFILE_APP
 
 AREACODE_FALLBACK = AREACODE_GUANGDONG = "030000"
 
@@ -81,6 +116,7 @@ ATTR_ADDRESS = "address"
 ATTR_USER_NAME = "user_name"
 ATTR_AUTH_TOKEN = "auth_token"
 ATTR_LOGIN_TYPE = "login_type"
+ATTR_API_PROFILE = "api_profile"
 
 # JSON/Headers used in raw APIs
 HEADER_X_AUTH_TOKEN = "x-auth-token"

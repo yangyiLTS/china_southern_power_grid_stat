@@ -6,13 +6,19 @@ import sys
 import time
 
 from csg_client import (
-    LOGIN_TYPE_TO_QR_CODE_TYPE,
     CSGClient,
     CSGElectricityAccount,
     LoginType,
+    api_profile_for_login_type,
 )
 
 QR_SCAN_TIMEOUT = 300
+
+
+def redact_identifier(value):
+    """Mask identifiers in terminal output."""
+    text = str(value or "")
+    return "****" if len(text) <= 4 else f"{text[0]}***{text[-2:]}"
 
 # set this to False to use saved session
 FRESH_LOGIN = False
@@ -49,7 +55,7 @@ if __name__ == "__main__":
         if login_type is None:
             print("无效选择，请重试")
             sys.exit(1)
-        client = CSGClient()
+        client = CSGClient(api_profile=api_profile_for_login_type(login_type))
 
         if login_type in [LoginType.LOGIN_TYPE_SMS, LoginType.LOGIN_TYPE_PWD_AND_SMS]:
             if not USERNAME or (
@@ -72,13 +78,13 @@ if __name__ == "__main__":
             LoginType.LOGIN_TYPE_WX_QR,
             LoginType.LOGIN_TYPE_ALI_QR,
         ]:
-            login_id, qr_url = client.api_create_login_qr_code(
-                channel=LOGIN_TYPE_TO_QR_CODE_TYPE[login_type]
-            )
+            login_id, qr_url = client.api_create_login_qr_code(login_type)
             print(f"请打开链接扫码登录：{qr_url}")
             start_time = time.time()
             while time.time() - start_time < QR_SCAN_TIMEOUT:
-                ok, auth_token = client.api_get_qr_login_status(login_id)
+                ok, auth_token = client.api_get_qr_login_status(
+                    login_id, login_type
+                )
                 if ok:
                     print("扫码成功！")
                     break
@@ -108,26 +114,23 @@ if __name__ == "__main__":
 
     print("验证登录状态:", client.verify_login())
 
-    print("用户信息:", client.api_get_user_info())
+    client.api_get_user_info()
+    print("用户信息接口验证成功")
 
     accounts = client.get_all_electricity_accounts()
     print(f"共{len(accounts)}个绑定的电费账户")
 
     print("电费账户列表:")
     for i, account in enumerate(accounts):
-        print(
-            f"{i + 1}. {account.account_number}, {account.address}, {account.user_name}"
-        )
+        print(f"{i + 1}. {redact_identifier(account.account_number)}")
     print("\n")
 
     account: CSGElectricityAccount = accounts[0]
-    print(
-        f"选取第一个账户: {account.account_number}, {account.address}, {account.user_name}"
-    )
+    print(f"选取第一个账户: {redact_identifier(account.account_number)}")
 
     input("按回车获取余额和欠费")
     bal, arr = client.get_balance_and_arrears(account)
-    print(f"账户 {account.account_number}, 余额: {bal}, 欠费: {arr}")
+    print(f"账户 {redact_identifier(account.account_number)}, 余额: {bal}, 欠费: {arr}")
     input("按回车获取当前月份每日用电数据")
     (
         month_total_cost,
@@ -138,5 +141,5 @@ if __name__ == "__main__":
         account, (datetime.datetime.now().year, datetime.datetime.now().month)
     )
     print(
-        f"账户 {account.account_number}, 当月总电费: {month_total_cost}, 当月总电量: {month_total_kwh}kWh, 当前阶梯: {ladder}, 每日数据: {by_day}"
+        f"账户 {redact_identifier(account.account_number)}, 当月总电费: {month_total_cost}, 当月总电量: {month_total_kwh}kWh, 当前阶梯: {ladder}, 每日数据条数: {len(by_day)}"
     )

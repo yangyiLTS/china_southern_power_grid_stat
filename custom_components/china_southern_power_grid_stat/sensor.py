@@ -31,6 +31,7 @@ from homeassistant.helpers.update_coordinator import (
 from . import CONF_UPDATED_AT
 from .const import (
     ATTR_KEY_CURRENT_LADDER_START_DATE,
+    ATTR_KEY_HISTORY_BY_MONTH,
     ATTR_KEY_LAST_MONTH_BY_DAY,
     ATTR_KEY_LAST_YEAR_BY_MONTH,
     ATTR_KEY_LATEST_DAY_DATE,
@@ -44,6 +45,7 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     DATA_KEY_LAST_UPDATE_DAY,
     DOMAIN,
+    HISTORY_YEAR_COUNT,
     SETTING_LAST_MONTH_UPDATE_DAY_THRESHOLD,
     SETTING_LAST_YEAR_UPDATE_DAY_THRESHOLD,
     SETTING_UPDATE_TIMEOUT,
@@ -76,6 +78,7 @@ from .csg_client import (
     WF_ATTR_LADDER_REMAINING_KWH,
     WF_ATTR_LADDER_START_DATE,
     WF_ATTR_LADDER_TARIFF,
+    WF_ATTR_MONTH,
     CSGAPIError,
     CSGClient,
     CSGElectricityAccount,
@@ -129,7 +132,10 @@ async def async_setup_entry(
                 coordinator,
                 ele_account_number,
                 SUFFIX_THIS_YEAR_KWH,
-                extra_state_attributes_key=ATTR_KEY_THIS_YEAR_BY_MONTH,
+                extra_state_attributes_key=(
+                    ATTR_KEY_THIS_YEAR_BY_MONTH,
+                    ATTR_KEY_HISTORY_BY_MONTH,
+                ),
             ),
             # this year's total cost
             CSGCostSensor(
@@ -218,7 +224,7 @@ class CSGBaseSensor(
         coordinator: DataUpdateCoordinator,
         account_number: str,
         entity_suffix: str,
-        extra_state_attributes_key: str | None = None,
+        extra_state_attributes_key: str | tuple[str, ...] | None = None,
     ) -> None:
         SensorEntity.__init__(self)
         CoordinatorEntity.__init__(self, coordinator)
@@ -227,7 +233,10 @@ class CSGBaseSensor(
 
         self._entity_suffix = entity_suffix
         self._attr_extra_state_attributes = {}
-        self._extra_state_attributes_key = extra_state_attributes_key
+        if isinstance(extra_state_attributes_key, str):
+            self._extra_state_attributes_keys = (extra_state_attributes_key,)
+        else:
+            self._extra_state_attributes_keys = extra_state_attributes_key or ()
 
     @property
     def unique_id(self) -> str | None:
@@ -304,15 +313,18 @@ class CSGBaseSensor(
         # from this point, `new_native_value` is a true value
         self._attr_native_value = new_native_value
 
-        if self._extra_state_attributes_key:
-            new_attributes = account_data.get(self._extra_state_attributes_key)
-            if new_attributes is None:
-                new_attributes = {}
-                _LOGGER.warning(
-                    "%s attribute %s not found in coordinator data",
-                    self._log_id,
-                    self._extra_state_attributes_key,
-                )
+        if self._extra_state_attributes_keys:
+            new_attributes = {}
+            for attribute_key in self._extra_state_attributes_keys:
+                attribute_data = account_data.get(attribute_key)
+                if attribute_data is None:
+                    _LOGGER.warning(
+                        "%s attribute %s not found in coordinator data",
+                        self._log_id,
+                        attribute_key,
+                    )
+                    continue
+                new_attributes.update(attribute_data)
             self._attr_extra_state_attributes = new_attributes
         _LOGGER.debug("%s state update done", self._log_id)
         self.async_write_ha_state()
@@ -370,6 +382,7 @@ class CSGCoordinator(DataUpdateCoordinator):
         self._last_month_ym = None
         self._this_month_update_completed_flag = asyncio.Event()
         self._gathered_data = {}
+        self._historical_months = {}
 
     async def _async_refresh_client(self):
         """Refresh the client, update the user data.
@@ -581,6 +594,48 @@ class CSGCoordinator(DataUpdateCoordinator):
         ] = last_year_cost
         self._gathered_data[account.account_number][ATTR_KEY_LAST_YEAR_BY_MONTH] = {
             ATTR_KEY_LAST_YEAR_BY_MONTH: last_year_by_month
+        }
+
+    async def _async_update_historical_stats(self, account: CSGElectricityAccount):
+        """Merge official monthly usage and cost rows for a rolling four years."""
+        account_number = account.account_number
+        by_month = {
+            row[WF_ATTR_MONTH]: row
+            for row in self._historical_months.get(account_number, [])
+        }
+
+        for attribute_key in (
+            ATTR_KEY_THIS_YEAR_BY_MONTH,
+            ATTR_KEY_LAST_YEAR_BY_MONTH,
+        ):
+            attribute_data = self._gathered_data[account_number].get(attribute_key)
+            rows = attribute_data.get(attribute_key) if attribute_data else None
+            if isinstance(rows, list):
+                by_month.update({row[WF_ATTR_MONTH]: row for row in rows})
+
+        oldest_year = self._this_year - HISTORY_YEAR_COUNT + 1
+        older_years = list(range(oldest_year, self._last_year))
+        cached_years = {int(month[:4]) for month in by_month}
+        missing_years = [year for year in older_years if year not in cached_years]
+        if missing_years:
+            success, result = await self._async_fetch(
+                self._client.get_years_month_stats,
+                account,
+                missing_years,
+            )
+            if success:
+                by_month.update({row[WF_ATTR_MONTH]: row for row in result})
+            else:
+                _LOGGER.warning(
+                    "Historical monthly data is incomplete for account %s: %s",
+                    redact_identifier(account_number),
+                    result,
+                )
+
+        history = [by_month[month] for month in sorted(by_month)]
+        self._historical_months[account_number] = history
+        self._gathered_data[account_number][ATTR_KEY_HISTORY_BY_MONTH] = {
+            ATTR_KEY_HISTORY_BY_MONTH: history
         }
 
     async def _async_update_this_month_stats_and_ladder(
@@ -870,6 +925,7 @@ class CSGCoordinator(DataUpdateCoordinator):
             self._async_update_last_month_stats(account),
             return_exceptions=True,
         )
+        await self._async_update_historical_stats(account)
         try:
             self._update_latest_day(account)
         except Exception as exc:  # pylint: disable=broad-except

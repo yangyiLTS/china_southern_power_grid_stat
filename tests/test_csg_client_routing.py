@@ -304,3 +304,32 @@ def test_removed_data_api_paths_do_not_return():
     source = (INTEGRATION_ROOT / "csg_client" / "__init__.py").read_text()
     assert "queryDayElectricChargeByMPoint" not in source
     assert "queryDayElectricByMPointYesterday" not in source
+
+
+def test_multi_year_history_keeps_official_monthly_usage_and_cost(monkeypatch):
+    client = CSGClient(auth_token="secret", api_profile=API_PROFILE_WEB)
+    calls = []
+
+    def fake_year_stats(_account, year):
+        calls.append(year)
+        return (
+            float(year),
+            float(year * 2),
+            [
+                {
+                    "month": f"{year}-01",
+                    "charge": float(year),
+                    "kwh": float(year * 2),
+                }
+            ],
+        )
+
+    monkeypatch.setattr(client, "get_year_month_stats", fake_year_stats)
+
+    rows = client.get_years_month_stats(_account(), [2023, 2024])
+
+    assert calls == [2023, 2024]
+    assert rows == [
+        {"month": "2023-01", "charge": 2023.0, "kwh": 4046.0},
+        {"month": "2024-01", "charge": 2024.0, "kwh": 4048.0},
+    ]

@@ -931,6 +931,16 @@ class CSGClient:
             )
         return float(total_year_charge), float(total_year_kwh), by_month
 
+    def get_years_month_stats(
+        self, account: CSGElectricityAccount, years: list[int]
+    ) -> list[dict[str, str | float]]:
+        """Return official monthly usage and charge rows for multiple years."""
+        by_month = []
+        for year in years:
+            _, _, year_rows = self.get_year_month_stats(account, year)
+            by_month.extend(year_rows)
+        return sorted(by_month, key=lambda item: item[WF_ATTR_MONTH])
+
     def get_yesterday_kwh(self, account: CSGElectricityAccount) -> float | None:
         """Derive yesterday's usage from the maintained monthly detail API."""
         yesterday = datetime.date.today() - datetime.timedelta(days=1)

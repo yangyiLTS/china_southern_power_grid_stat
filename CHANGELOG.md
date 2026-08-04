@@ -4,6 +4,15 @@ All notable changes to this maintained fork are documented here. The format is
 based on Keep a Changelog and releases follow semantic versioning where the
 upstream component version permits it.
 
+## [1.4.0] - 2026-08-05
+
+### Added
+
+- Expose a rolling four-year `history_by_month` attribute on the current-year
+  usage sensor. Every row keeps the official month, usage and charge returned
+  by annual analysis, allowing dashboards to switch between daily month views
+  and historical year views without estimating missing daily charges.
+
 ## [1.3.1] - 2026-08-05
 
 ### Added
@@ -39,5 +48,6 @@ upstream component version permits it.
 
 Original upstream release. See the upstream Git history for earlier changes.
 
+[1.4.0]: https://github.com/benj-tang/china_southern_power_grid_stat/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/benj-tang/china_southern_power_grid_stat/compare/v1.2.0...v1.3.1
 [1.2.0]: https://github.com/CubicPill/china_southern_power_grid_stat/releases/tag/v1.2.0

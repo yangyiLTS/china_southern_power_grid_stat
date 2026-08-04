@@ -73,6 +73,7 @@ ATTR_KEY_THIS_MONTH_BY_DAY = "this_month_by_day"
 ATTR_KEY_THIS_YEAR_BY_MONTH = "this_year_by_month"
 ATTR_KEY_LAST_MONTH_BY_DAY = "last_month_by_day"
 ATTR_KEY_LAST_YEAR_BY_MONTH = "last_year_by_month"
+ATTR_KEY_HISTORY_BY_MONTH = "history_by_month"
 ATTR_KEY_LATEST_DAY_DATE = "latest_day_date"
 ATTR_KEY_CURRENT_LADDER_START_DATE = "current_ladder_start_date"
 
@@ -87,6 +88,7 @@ SETTING_UPDATE_TIMEOUT = 60
 SETTING_LAST_MONTH_UPDATE_DAY_THRESHOLD = 3
 # the first n days in a year that will get data of last year
 SETTING_LAST_YEAR_UPDATE_DAY_THRESHOLD = 7
+HISTORY_YEAR_COUNT = 4
 
 
 # defaults

@@ -1,83 +1,60 @@
-# Benjamin maintained CSG integration
+# Maintenance policy
 
-This branch is a locally maintained derivative of
-`CubicPill/china_southern_power_grid_stat` v1.2.0 under GPL-3.0. It is not an
-official China Southern Power Grid integration. Production deployments are
-pinned to a reviewed local commit and retain an executable rollback.
+This repository is a community-maintained derivative of
+`CubicPill/china_southern_power_grid_stat` under GPL-3.0. It is not an official
+China Southern Power Grid integration and is not presented as an official
+continuation by the original maintainer.
 
-## Source policy
+## Source and attribution
 
-- Keep `origin` fetch-only and pin every production deployment to a reviewed
-  commit.
-- Cherry-pick narrow fixes with original authorship instead of replacing the
-  component with an unreviewed fork.
-- Never add a network destination outside the fixed `95598.csg.cn` allowlist.
-- Never persist the user's login password or write tokens, full account
-  numbers, names, addresses, or API response bodies to logs.
-- Treat the browser session as validation evidence only; never extract cookies,
-  browser storage, or login tokens.
+- Preserve the original Git history, license and author attribution.
+- Keep the original repository configured as `upstream` and review its changes.
+- Cherry-pick narrow fixes with original authorship when importing from forks.
+- Record user-visible behavior changes in `CHANGELOG.md`.
 
-## Imported fixes
+Imported maintenance work currently includes:
 
-| Source commit | Purpose |
+| Source | Purpose |
 | --- | --- |
-| `elvinsophus@3837bc4` | Home Assistant 2025.12+ options flow, reauth and Python 3.14 compatibility |
-| `seagaruda@b67718d` | 30-second HTTP timeout and explicit client imports |
-| `L1yp@2657254` | Original graceful handling when yesterday's usage is not published; superseded locally by removal of the retired endpoint |
+| `elvinsophus@3837bc4` | Current HA options flow, reauth and Python 3.14 compatibility |
+| `seagaruda@b67718d` | Request timeout and explicit client imports |
+| `L1yp@2657254` | Graceful handling when yesterday's data is not published |
 
-## Local fixes
+## Security boundary
 
-- Route SMS sessions through the handheld API and QR sessions through the web
-  API instead of mixing the two session channels.
-- Keep WeChat on the legacy QR endpoint, while the CSG App and Alipay use the
-  current `/mp/w2/wx/userauth/user/manage/*` QR service found in the official
-  South Grid web client `1.6.230`.
-- Persist an allowlisted API profile name, never a caller-supplied URL.
-- Stop persisting the interactive login password and stop logging API payloads
-  and full response bodies.
-- Copy nested config-entry mappings before modification for current Home
-  Assistant immutable config-entry data.
-- Use the current online-hall AES material for web-profile requests and decrypt
-  responses when the service marks them with `need-decrypto`.
-- Route current user, metering-point, monthly usage, balance and annual-analysis
-  calls according to the encryption flags in the official web client.
-- Remove the retired `queryDayElectricChargeByMPoint` and
-  `queryDayElectricByMPointYesterday` calls. Monthly cost now comes from
-  `queryDayElectricByMPoint.totalElectricity`; yesterday is derived by matching
-  the exact date in that endpoint's daily results.
-- Accept both the current object-shaped balance response and the legacy
-  one-item-list response during migration.
-- Send the metering-point number required by the current annual-analysis call.
-- Mask phone numbers and electricity-account identifiers in integration logs.
-- Use Home Assistant's progress-task flow to poll QR status every two seconds,
-  finish automatically after mobile confirmation, and replace expired QR codes
-  without requiring a manual submit or refresh.
-- Rotate an unscanned QR locally after five minutes as a stale-code guard. The
-  maintained endpoint was observed still returning "not scanned" after six
-  minutes, so five minutes is not represented as an official server expiry.
-- Discover and add all linked electricity accounts immediately after a new
-  login so a successful login produces sensors without a hidden options step.
-- Attach the update coordinator to its config entry so an expired session
-  starts Home Assistant's reauthentication flow, and create a deduplicated
-  persistent notification until login succeeds again.
+- Network destinations stay on the fixed `95598.csg.cn` allowlist.
+- Never persist an interactive login password.
+- Never log tokens, full account numbers, names, addresses or API bodies.
+- Mask account-like identifiers before diagnostics leave the process.
+- Browser sessions may be used to validate the official UI, but cookies,
+  browser storage and login tokens must not be extracted.
+- New endpoints require evidence from the current official client and a
+  minimized request/response contract test before production use.
 
-## Current data limitations
+## API maintenance
 
-- South Grid documents daily data as publishing within T+3 days. A missing
-  yesterday value is normal and must not be replaced by the latest available
-  day's value.
-- The current web client no longer exposes a dedicated daily-cost API. Monthly
-  total cost remains supported, while per-day cost and the latest-day-cost
-  sensor stay unavailable unless the maintained monthly response supplies a
-  `charge` field.
-- Ladder fields are treated as optional because the current web UI uses a
-  separate advisory endpoint rather than the retired daily-cost response.
+The current implementation separates handheld and Web session profiles. QR
+sessions use the Web profile and the current online-hall encryption material;
+SMS sessions use the handheld profile. Callers persist only an allowlisted
+profile name, never a caller-supplied URL.
 
-## Acceptance gate before production
+The retired `queryDayElectricChargeByMPoint` and
+`queryDayElectricByMPointYesterday` routes are intentionally absent. Monthly
+usage and any optional cost data come from `queryDayElectricByMPoint`;
+yesterday's value is derived only from an exact date match. Annual totals and
+monthly annual-analysis rows come from `getAnalyzeFeeDetails`.
 
-1. Unit tests and static checks pass.
-2. The component imports in the exact Home Assistant production image.
-3. A backup and executable rollback are prepared.
-4. A fresh QR login returns exactly one bound electricity account.
-5. At least one real usage request succeeds and creates valid energy sensors.
-6. Home Assistant restarts cleanly and the account still refreshes.
+Missing fields remain unavailable. In particular, no local tariff model may
+turn a missing official charge or ladder value into an apparently official
+sensor value.
+
+## Release gate
+
+1. `uv run ruff check .` and `uv run pytest -q` pass.
+2. HACS and hassfest validation pass.
+3. The component imports in the target Home Assistant image.
+4. A fresh QR flow completes automatically and discovers linked accounts.
+5. Real balance, usage and annual-analysis calls succeed without sensitive logs.
+6. A production backup and executable rollback exist before deployment.
+7. The release contains no credentials, private account data or captured API
+   response bodies.

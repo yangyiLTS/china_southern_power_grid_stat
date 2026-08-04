@@ -36,15 +36,15 @@
       },
       "qr_login": {
         "title": "扫码登录",
-        "description": "{description}",
-        "data": {
-          "refresh_qr_code": "刷新二维码"
-        }
+        "description": "{description}"
       },
       "reauth_confirm": {
         "title": "重新登录账号",
         "description": "登录状态已过期，请重新登录"
       }
+    },
+    "progress": {
+      "wait_for_qr_login": "{description}"
     },
     "error": {
       "cannot_connect": "网络异常",
@@ -54,7 +54,9 @@
     },
     "abort": {
       "reauth_successful": "登录成功",
-      "already_configured": "账号已添加，请勿重复添加"
+      "already_configured": "账号已添加，请勿重复添加",
+      "cannot_connect": "无法连接南方电网服务，请稍后重试",
+      "unknown": "南方电网登录发生未知错误，请稍后重试"
     }
   },
   "options": {

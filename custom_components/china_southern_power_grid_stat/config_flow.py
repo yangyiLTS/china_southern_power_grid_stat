@@ -8,6 +8,8 @@ Steps:
 """
 from __future__ import annotations
 
+import asyncio
+import html
 import logging
 import time
 from typing import Any
@@ -30,7 +32,6 @@ from .const import (
     CONF_ELE_ACCOUNTS,
     CONF_GENERAL_ERROR,
     CONF_LOGIN_TYPE,
-    CONF_REFRESH_QR_CODE,
     CONF_SETTINGS,
     CONF_SMS_CODE,
     CONF_UPDATE_INTERVAL,
@@ -39,7 +40,6 @@ from .const import (
     DOMAIN,
     ERROR_CANNOT_CONNECT,
     ERROR_INVALID_AUTH,
-    ERROR_QR_NOT_SCANNED,
     ERROR_UNKNOWN,
     LOGIN_TYPE_TO_QR_APP_NAME,
     STEP_ADD_ACCOUNT,
@@ -61,8 +61,12 @@ from .csg_client import (
     CSGElectricityAccount,
     InvalidCredentials,
     LoginType,
+    QrCodeExpired,
     api_profile_for_login_type,
 )
+from .csg_client.const import QR_AUTO_REFRESH_SECONDS
+
+QR_POLL_INTERVAL_SECONDS = 2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +76,13 @@ class CSGConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
     _reauth_entry: config_entries.ConfigEntry | None = None
+
+    def __init__(self) -> None:
+        """Initialize per-flow QR login state."""
+        self._qr_login_task: asyncio.Task[str | None] | None = None
+        self._qr_auth_token: str | None = None
+        self._qr_image_link: str | None = None
+        self._qr_refresh_count = 0
 
     @staticmethod
     @callback
@@ -255,64 +266,132 @@ class CSGConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_qr_login(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle QR code login step."""
-        client: CSGClient = CSGClient()
-        if user_input is None:
-            # create QR code
-            login_type = self.context["user_data"][CONF_LOGIN_TYPE]
-            login_id, image_link = await self.hass.async_add_executor_job(
-                client.api_create_login_qr_code, login_type
-            )
-            self.context["user_data"]["login_id"] = login_id
-            self.context["user_data"]["image_link"] = image_link
-            return self.async_show_form(
-                step_id=STEP_QR_LOGIN,
-                data_schema=vol.Schema(
-                    {vol.Required(CONF_REFRESH_QR_CODE, default=False): bool}
-                ),
-                description_placeholders={
-                    "description": f"<p>使用{LOGIN_TYPE_TO_QR_APP_NAME[login_type]}扫码登录。登录完成后，点击下一步。"
-                    f'</p><img src="{image_link}" alt="QR code" style="width: 200px;"/>',
-                },
-            )
-        if user_input[CONF_REFRESH_QR_CODE]:
-            return await self.async_step_qr_login()
-        return await self.async_step_validate_qr_login()
+        """Show a QR code and automatically wait for login confirmation."""
+        login_type = self.context["user_data"][CONF_LOGIN_TYPE]
 
-    async def async_step_validate_qr_login(
+        if self._qr_login_task is None:
+            client = CSGClient()
+            try:
+                login_id, self._qr_image_link = (
+                    await self.hass.async_add_executor_job(
+                        client.api_create_login_qr_code, login_type
+                    )
+                )
+            except RequestException:
+                return self.async_abort(reason=ERROR_CANNOT_CONNECT)
+            except Exception:
+                _LOGGER.exception("Unexpected exception when creating login QR code")
+                return self.async_abort(reason=ERROR_UNKNOWN)
+
+            self._qr_login_task = self.hass.async_create_task(
+                self._async_wait_for_qr_login(login_id, login_type),
+                "csg_qr_login_poll",
+            )
+
+        if not self._qr_login_task.done():
+            refresh_notice = (
+                "<p><strong>上一张二维码已过期，已自动更换。</strong></p>"
+                if self._qr_refresh_count
+                else ""
+            )
+            safe_image_link = html.escape(self._qr_image_link or "", quote=True)
+            description = (
+                f"{refresh_notice}<p>使用{LOGIN_TYPE_TO_QR_APP_NAME[login_type]}"
+                "扫码并在手机上确认。此页面会自动检查登录状态，无需点击下一步。"
+                "如一直未扫码，页面会每 5 分钟主动换一张新码。</p>"
+                f'<img src="{safe_image_link}" alt="登录二维码" '
+                'style="width: min(240px, 70vw); height: auto;"/>'
+            )
+            return self.async_show_progress(
+                step_id=STEP_QR_LOGIN,
+                progress_action="wait_for_qr_login",
+                progress_task=self._qr_login_task,
+                description_placeholders={"description": description},
+            )
+
+        try:
+            auth_token = self._qr_login_task.result()
+        except RequestException:
+            self._qr_login_task = None
+            return self.async_show_progress_done(
+                next_step_id="qr_login_connection_error"
+            )
+        except Exception:
+            _LOGGER.exception("Unexpected exception while polling login QR code")
+            self._qr_login_task = None
+            return self.async_show_progress_done(next_step_id="qr_login_unknown_error")
+
+        self._qr_login_task = None
+        if auth_token is None:
+            self._qr_refresh_count += 1
+            return self.async_show_progress_done(next_step_id="qr_login_refresh")
+
+        self._qr_auth_token = auth_token
+        return self.async_show_progress_done(next_step_id="qr_login_finish")
+
+    async def _async_wait_for_qr_login(
+        self, login_id: str, login_type: LoginType
+    ) -> str | None:
+        """Poll the QR login status until success or expiration."""
+        client = CSGClient(api_profile=API_PROFILE_WEB)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + QR_AUTO_REFRESH_SECONDS
+
+        while True:
+            try:
+                ok, auth_token = await self.hass.async_add_executor_job(
+                    client.api_get_qr_login_status, login_id, login_type
+                )
+            except QrCodeExpired:
+                return None
+
+            if ok:
+                return auth_token
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            await asyncio.sleep(min(QR_POLL_INTERVAL_SECONDS, remaining))
+
+    async def async_step_qr_login_refresh(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Get QR scan status after user has scanned the code"""
-        client = CSGClient(api_profile=API_PROFILE_WEB)
-        login_type = self.context["user_data"][CONF_LOGIN_TYPE]
-        login_id = self.context["user_data"]["login_id"]
-        ok, auth_token = await self.hass.async_add_executor_job(
-            client.api_get_qr_login_status, login_id, login_type
-        )
-        if ok:
-            # for QR login, use mobile number as username
-            client.set_authentication_params(auth_token)
-            user_info = await self.hass.async_add_executor_job(client.api_get_user_info)
-            username = user_info["mobile"]
-            await self.check_and_set_unique_id(username)
-            return await self.create_or_update_config_entry(
-                auth_token, login_type, "", username
-            )
+        """Automatically replace an expired QR code."""
+        return await self.async_step_qr_login()
 
-        # scan not detected, return to previous step
-        image_link = self.context["user_data"]["image_link"]
-        return self.async_show_form(
-            step_id=STEP_QR_LOGIN,
-            data_schema=vol.Schema(
-                {vol.Required(CONF_REFRESH_QR_CODE, default=False): bool}
-            ),
-            errors={CONF_GENERAL_ERROR: ERROR_QR_NOT_SCANNED},
-            # had to do this because strings.json conflicts with html tags
-            description_placeholders={
-                "description": f"<p>使用{LOGIN_TYPE_TO_QR_APP_NAME[login_type]}扫码登录。登录完成后，点击下一步。</p>"
-                f'<img src="{image_link}" alt="QR code" style="width: 200px;"/>',
-            },
+    async def async_step_qr_login_finish(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Finish a successful QR login without another user action."""
+        assert self._qr_auth_token is not None
+        login_type = self.context["user_data"][CONF_LOGIN_TYPE]
+        client = CSGClient(api_profile=API_PROFILE_WEB)
+        client.set_authentication_params(self._qr_auth_token)
+        try:
+            user_info = await self.hass.async_add_executor_job(client.api_get_user_info)
+        except RequestException:
+            return self.async_abort(reason=ERROR_CANNOT_CONNECT)
+        except Exception:
+            _LOGGER.exception("Unexpected exception while completing QR login")
+            return self.async_abort(reason=ERROR_UNKNOWN)
+
+        username = user_info["mobile"]
+        await self.check_and_set_unique_id(username)
+        return await self.create_or_update_config_entry(
+            self._qr_auth_token, login_type, "", username
         )
+
+    async def async_step_qr_login_connection_error(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Abort a QR flow when the service cannot be reached."""
+        return self.async_abort(reason=ERROR_CANNOT_CONNECT)
+
+    async def async_step_qr_login_unknown_error(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Abort a QR flow after an unexpected polling failure."""
+        return self.async_abort(reason=ERROR_UNKNOWN)
 
     async def check_and_set_unique_id(self, username: str):
         """set unique id for the config entry, abort if already configured"""
@@ -328,6 +407,30 @@ class CSGConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Create or update config entry
         If the account is newly added, create a new entry
         If the account is already added (reauth), update the existing entry"""
+        linked_accounts: dict[str, dict[str, str]] = {}
+        if not self._reauth_entry:
+            client = CSGClient.load(
+                {
+                    CONF_AUTH_TOKEN: auth_token,
+                    CONF_API_PROFILE: api_profile_for_login_type(login_type),
+                }
+            )
+            try:
+                await self.hass.async_add_executor_job(client.initialize)
+                accounts = await self.hass.async_add_executor_job(
+                    client.get_all_electricity_accounts
+                )
+            except RequestException:
+                return self.async_abort(reason=ERROR_CANNOT_CONNECT)
+            except Exception:
+                _LOGGER.exception(
+                    "Unexpected exception while discovering linked electricity accounts"
+                )
+                return self.async_abort(reason=ERROR_UNKNOWN)
+            linked_accounts = {
+                account.account_number: account.dump() for account in accounts
+            }
+
         data = {
             CONF_USERNAME: username,
             # Password login is interactive and the password is not required
@@ -336,7 +439,7 @@ class CSGConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_LOGIN_TYPE: login_type,
             CONF_AUTH_TOKEN: auth_token,
             CONF_API_PROFILE: api_profile_for_login_type(login_type),
-            CONF_ELE_ACCOUNTS: {},
+            CONF_ELE_ACCOUNTS: linked_accounts,
             CONF_SETTINGS: {
                 CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL,
             },

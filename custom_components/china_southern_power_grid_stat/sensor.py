@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Any
 
 import async_timeout
+from homeassistant.components import persistent_notification
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -63,6 +64,7 @@ from .const import (
     SUFFIX_THIS_YEAR_COST,
     SUFFIX_THIS_YEAR_KWH,
     SUFFIX_YESTERDAY_KWH,
+    auth_notification_id,
     redact_identifier,
 )
 from .csg_client import (
@@ -93,7 +95,7 @@ async def async_setup_entry(
     if not config_entry.data[CONF_ELE_ACCOUNTS]:
         _LOGGER.info("No ele accounts in config, exit entry setup")
         return
-    coordinator = CSGCoordinator(hass, config_entry.entry_id)
+    coordinator = CSGCoordinator(hass, config_entry)
 
     all_sensors = []
     for ele_account_number, _ in config_entry.data[CONF_ELE_ACCOUNTS].items():
@@ -343,13 +345,14 @@ class CSGLadderStageSensor(CSGBaseSensor):
 class CSGCoordinator(DataUpdateCoordinator):
     """CSG custom coordinator."""
 
-    def __init__(self, hass: HomeAssistant, config_entry_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize coordinator."""
-        self._config_entry_id = config_entry_id
+        self._config_entry_id = config_entry.entry_id
         self._config = hass.config_entries.async_get_entry(self._config_entry_id).data
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             # Name of the data. For logging purposes.
             name=f"CSG Account {self._config_entry_id}",
             # Polling interval. Will only be polled if there are subscribers.
@@ -390,6 +393,15 @@ class CSGCoordinator(DataUpdateCoordinator):
             _LOGGER.warning(
                 "%s: Login expired",
                 redact_identifier(self._config[CONF_USERNAME]),
+            )
+            persistent_notification.async_create(
+                self.hass,
+                (
+                    "南网在线登录已过期，电费数据已停止更新。请前往“设置 → "
+                    "设备与服务 → 南方电网电费统计”，选择“重新配置”后再次扫码。"
+                ),
+                title="南方电网需要重新登录",
+                notification_id=auth_notification_id(self._config_entry_id),
             )
             raise ConfigEntryAuthFailed("Login expired")
 

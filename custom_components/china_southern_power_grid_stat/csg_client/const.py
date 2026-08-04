@@ -104,7 +104,10 @@ RESP_STA_QR_TIMEOUT = "00010001"
 # from packet capture
 RESP_STA_LOGIN_WRONG_CREDENTIAL = "00010002"
 
-QR_EXPIRY_SECONDS = 300
+# The current status endpoint can keep returning "not scanned" beyond five
+# minutes. Rotate a stale QR locally so the user is never left with an old code;
+# this is a UI safety guard, not a claimed server-side expiry duration.
+QR_AUTO_REFRESH_SECONDS = 300
 
 # account object serialisation and deserialisation
 ATTR_ACCOUNT_NUMBER = "account_number"

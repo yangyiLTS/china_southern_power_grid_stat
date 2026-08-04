@@ -2,7 +2,9 @@
     "config": {
         "abort": {
             "already_configured": "\u8d26\u53f7\u5df2\u6dfb\u52a0\uff0c\u8bf7\u52ff\u91cd\u590d\u6dfb\u52a0",
-            "reauth_successful": "\u767b\u5f55\u6210\u529f"
+            "cannot_connect": "\u65e0\u6cd5\u8fde\u63a5\u5357\u65b9\u7535\u7f51\u670d\u52a1\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5",
+            "reauth_successful": "\u767b\u5f55\u6210\u529f",
+            "unknown": "\u5357\u65b9\u7535\u7f51\u767b\u5f55\u53d1\u751f\u672a\u77e5\u9519\u8bef\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5"
         },
         "error": {
             "cannot_connect": "\u7f51\u7edc\u5f02\u5e38",
@@ -12,9 +14,6 @@
         },
         "step": {
             "qr_login": {
-                "data": {
-                    "refresh_qr_code": "\u5237\u65b0\u4e8c\u7ef4\u7801"
-                },
                 "description": "{description}",
                 "title": "\u626b\u7801\u767b\u5f55"
             },
@@ -55,6 +54,9 @@
                 "description": "\u9a8c\u8bc1\u7801\u5df2\u53d1\u9001\u5230: {phone_no}",
                 "title": "\u8f93\u5165\u77ed\u4fe1\u9a8c\u8bc1\u7801"
             }
+        },
+        "progress": {
+            "wait_for_qr_login": "{description}"
         }
     },
     "options": {

@@ -2,8 +2,8 @@
 
 This branch is a locally maintained derivative of
 `CubicPill/china_southern_power_grid_stat` v1.2.0 under GPL-3.0. It is not an
-official China Southern Power Grid integration and is not yet deployed to the
-Home Assistant production instance.
+official China Southern Power Grid integration. Production deployments are
+pinned to a reviewed local commit and retain an executable rollback.
 
 ## Source policy
 
@@ -49,6 +49,17 @@ Home Assistant production instance.
   one-item-list response during migration.
 - Send the metering-point number required by the current annual-analysis call.
 - Mask phone numbers and electricity-account identifiers in integration logs.
+- Use Home Assistant's progress-task flow to poll QR status every two seconds,
+  finish automatically after mobile confirmation, and replace expired QR codes
+  without requiring a manual submit or refresh.
+- Rotate an unscanned QR locally after five minutes as a stale-code guard. The
+  maintained endpoint was observed still returning "not scanned" after six
+  minutes, so five minutes is not represented as an official server expiry.
+- Discover and add all linked electricity accounts immediately after a new
+  login so a successful login produces sensors without a hidden options step.
+- Attach the update coordinator to its config entry so an expired session
+  starts Home Assistant's reauthentication flow, and create a deduplicated
+  persistent notification until login succeeds again.
 
 ## Current data limitations
 

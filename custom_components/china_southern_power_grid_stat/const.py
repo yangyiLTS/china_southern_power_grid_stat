@@ -5,6 +5,7 @@ from datetime import timedelta
 from .csg_client import LoginType
 
 DOMAIN = "china_southern_power_grid_stat"
+AUTH_NOTIFICATION_ID_PREFIX = f"{DOMAIN}_reauth"
 
 # config flow
 # main account (phone number)
@@ -19,7 +20,6 @@ CONF_SETTINGS = "settings"
 CONF_UPDATED_AT = "updated_at"
 CONF_ACTION = "action"
 CONF_SMS_CODE = "sms_code"
-CONF_REFRESH_QR_CODE = "refresh_qr_code"
 
 STEP_USER = "user"
 STEP_SMS_LOGIN = "sms_login"
@@ -29,7 +29,6 @@ STEP_CSG_QR_LOGIN = "csg_qr_login"
 STEP_WX_QR_LOGIN = "wx_qr_login"
 STEP_ALI_QR_LOGIN = "ali_qr_login"
 STEP_QR_LOGIN = "qr_login"
-STEP_VALIDATE_QR_LOGIN = "validate_qr_login"
 STEP_INIT = "init"
 STEP_SETTINGS = "settings"
 STEP_ADD_ACCOUNT = "add_account"
@@ -41,7 +40,6 @@ CONF_GENERAL_ERROR = "base"
 ERROR_CANNOT_CONNECT = "cannot_connect"
 ERROR_INVALID_AUTH = "invalid_auth"
 ERROR_UNKNOWN = "unknown"
-ERROR_QR_NOT_SCANNED = "qr_not_scanned"
 
 # UI
 LOGIN_TYPE_TO_QR_APP_NAME = {
@@ -101,3 +99,8 @@ def redact_identifier(value: object) -> str:
     if len(text) <= 4:
         return "****"
     return f"{text[0]}***{text[-2:]}"
+
+
+def auth_notification_id(entry_id: str) -> str:
+    """Return the stable persistent-notification ID for one config entry."""
+    return f"{AUTH_NOTIFICATION_ID_PREFIX}_{entry_id}"

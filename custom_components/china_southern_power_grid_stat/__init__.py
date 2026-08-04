@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
@@ -19,6 +20,7 @@ from .const import (
     CONF_LOGIN_TYPE,
     CONF_UPDATED_AT,
     DOMAIN,
+    auth_notification_id,
     redact_identifier,
 )
 from .csg_client import (
@@ -45,7 +47,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
     )
     if not await hass.async_add_executor_job(client.verify_login):
+        persistent_notification.async_create(
+            hass,
+            (
+                "南网在线登录已过期，电费数据已停止更新。请前往“设置 → "
+                "设备与服务 → 南方电网电费统计”，选择“重新配置”后再次扫码。"
+            ),
+            title="南方电网需要重新登录",
+            notification_id=auth_notification_id(entry.entry_id),
+        )
         raise ConfigEntryAuthFailed("Login expired")
+
+    persistent_notification.async_dismiss(
+        hass, auth_notification_id(entry.entry_id)
+    )
 
     hass.data[DOMAIN][entry.entry_id] = {}
 

@@ -6,6 +6,12 @@ upstream component version permits it.
 
 ## [Unreleased]
 
+### Added
+
+- Add an opt-in Shenzhen residential tiered-tariff estimator for API responses
+  that omit monthly or daily charges. Official CSG charges always win, while
+  calculated values carry explicit estimate/source attributes.
+
 ### Fixed
 
 - Route Shenzhen daily usage and exact-yesterday lookups through the regional

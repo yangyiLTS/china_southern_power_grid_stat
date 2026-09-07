@@ -16,6 +16,7 @@ CONF_API_PROFILE = "api_profile"
 # electricity accounts
 CONF_ELE_ACCOUNTS = "accounts"
 CONF_UPDATE_INTERVAL = "update_interval"
+CONF_SHENZHEN_TARIFF_ESTIMATE = "shenzhen_tariff_estimate"
 CONF_SETTINGS = "settings"
 CONF_UPDATED_AT = "updated_at"
 CONF_ACTION = "action"
@@ -76,6 +77,13 @@ ATTR_KEY_LAST_YEAR_BY_MONTH = "last_year_by_month"
 ATTR_KEY_HISTORY_BY_MONTH = "history_by_month"
 ATTR_KEY_LATEST_DAY_DATE = "latest_day_date"
 ATTR_KEY_CURRENT_LADDER_START_DATE = "current_ladder_start_date"
+ATTR_KEY_BILLING_MONTH = "billing_month"
+ATTR_KEY_COST_ESTIMATED = "cost_estimated"
+ATTR_KEY_COST_SOURCE = "cost_source"
+ATTR_KEY_TARIFF_SOURCE = "tariff_source"
+ATTR_KEY_TARIFF_SEASON = "tariff_season"
+ATTR_KEY_TARIFF_FIRST_TIER_LIMIT_KWH = "tariff_first_tier_limit_kwh"
+ATTR_KEY_TARIFF_SECOND_TIER_LIMIT_KWH = "tariff_second_tier_limit_kwh"
 
 STATE_UPDATE_UNCHANGED = "unchanged"
 DATA_KEY_LAST_UPDATE_DAY = "last_update_day"
@@ -93,6 +101,7 @@ HISTORY_YEAR_COUNT = 4
 
 # defaults
 DEFAULT_UPDATE_INTERVAL = timedelta(hours=4).seconds
+DEFAULT_SHENZHEN_TARIFF_ESTIMATE = False
 
 
 def redact_identifier(value: object) -> str:

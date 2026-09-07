@@ -70,7 +70,11 @@
       "settings": {
         "title": "参数设置",
         "data": {
-          "update_interval": "更新间隔（秒）"
+          "update_interval": "更新间隔（秒）",
+          "shenzhen_tariff_estimate": "启用深圳居民阶梯电价估算（实验性）"
+        },
+        "data_description": {
+          "shenzhen_tariff_estimate": "仅对区域代码以 09 开头的深圳账号生效。只补全南网接口缺失的月费和日费，不覆盖官方费用；分时电价、合表、多人口及其他特殊政策可能不适用。"
         }
       }
     },

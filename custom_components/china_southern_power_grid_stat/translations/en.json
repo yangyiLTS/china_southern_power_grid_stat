@@ -73,7 +73,11 @@
             },
             "settings": {
                 "data": {
+                    "shenzhen_tariff_estimate": "Enable Shenzhen residential tiered-tariff estimates (experimental)",
                     "update_interval": "\u66f4\u65b0\u95f4\u9694\uff08\u79d2\uff09"
+                },
+                "data_description": {
+                    "shenzhen_tariff_estimate": "Applies only to Shenzhen accounts whose area code starts with 09. It fills missing monthly and daily charges without replacing official CSG values. Time-of-use, combined-meter, multi-person and other special tariffs may not apply."
                 },
                 "title": "\u53c2\u6570\u8bbe\u7f6e"
             }

@@ -30,11 +30,18 @@ from homeassistant.helpers.update_coordinator import (
 
 from . import CONF_UPDATED_AT
 from .const import (
+    ATTR_KEY_BILLING_MONTH,
+    ATTR_KEY_COST_ESTIMATED,
+    ATTR_KEY_COST_SOURCE,
     ATTR_KEY_CURRENT_LADDER_START_DATE,
     ATTR_KEY_HISTORY_BY_MONTH,
     ATTR_KEY_LAST_MONTH_BY_DAY,
     ATTR_KEY_LAST_YEAR_BY_MONTH,
     ATTR_KEY_LATEST_DAY_DATE,
+    ATTR_KEY_TARIFF_FIRST_TIER_LIMIT_KWH,
+    ATTR_KEY_TARIFF_SEASON,
+    ATTR_KEY_TARIFF_SECOND_TIER_LIMIT_KWH,
+    ATTR_KEY_TARIFF_SOURCE,
     ATTR_KEY_THIS_MONTH_BY_DAY,
     ATTR_KEY_THIS_YEAR_BY_MONTH,
     CONF_API_PROFILE,
@@ -42,8 +49,10 @@ from .const import (
     CONF_ELE_ACCOUNTS,
     CONF_LOGIN_TYPE,
     CONF_SETTINGS,
+    CONF_SHENZHEN_TARIFF_ESTIMATE,
     CONF_UPDATE_INTERVAL,
     DATA_KEY_LAST_UPDATE_DAY,
+    DEFAULT_SHENZHEN_TARIFF_ESTIMATE,
     DOMAIN,
     HISTORY_YEAR_COUNT,
     SETTING_LAST_MONTH_UPDATE_DAY_THRESHOLD,
@@ -85,8 +94,21 @@ from .csg_client import (
     NotLoggedIn,
     api_profile_for_login_type,
 )
+from .csg_client.const import AREACODE_SHENZHEN_PREFIX
+from .shenzhen_tariff import (
+    DAILY_CHARGE_SOURCE_API,
+    DAILY_CHARGE_SOURCE_ESTIMATE,
+    SHENZHEN_TARIFF_SOURCE,
+    calculate_shenzhen_daily_costs,
+    calculate_shenzhen_residential_tariff,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _is_available_value(value: Any) -> bool:
+    """Return whether a coordinator value contains usable API data."""
+    return value not in (None, STATE_UNAVAILABLE, STATE_UPDATE_UNCHANGED)
 
 
 async def async_setup_entry(
@@ -383,6 +405,82 @@ class CSGCoordinator(DataUpdateCoordinator):
         self._this_month_update_completed_flag = asyncio.Event()
         self._gathered_data = {}
         self._historical_months = {}
+
+    def _shenzhen_tariff_estimate_enabled(
+        self, account: CSGElectricityAccount
+    ) -> bool:
+        """Return whether the optional Shenzhen estimator applies to an account."""
+        settings = self._config.get(CONF_SETTINGS, {})
+        return str(account.area_code or "").startswith(
+            AREACODE_SHENZHEN_PREFIX
+        ) and bool(
+            settings.get(
+                CONF_SHENZHEN_TARIFF_ESTIMATE,
+                DEFAULT_SHENZHEN_TARIFF_ESTIMATE,
+            )
+        )
+
+    def _apply_shenzhen_tariff_estimate(
+        self,
+        account: CSGElectricityAccount,
+        year_month: tuple[int, int],
+        total_cost: Any,
+        total_kwh: Any,
+        by_day: Any,
+    ) -> tuple[Any, Any, Any, dict[str, Any]]:
+        """Fill only missing Shenzhen values when the estimator is enabled."""
+        if not self._shenzhen_tariff_estimate_enabled(account) or not (
+            _is_available_value(total_kwh)
+        ):
+            return total_cost, by_day, None, {}
+
+        try:
+            calculation = calculate_shenzhen_residential_tariff(
+                year_month[1], total_kwh
+            )
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            _LOGGER.warning(
+                "Unable to estimate Shenzhen monthly charge for account %s: %s",
+                redact_identifier(account.account_number),
+                exc,
+            )
+            return total_cost, by_day, None, {}
+        if isinstance(by_day, list) and by_day:
+            try:
+                by_day = calculate_shenzhen_daily_costs(
+                    year_month,
+                    by_day,
+                    preserve_existing_charges=True,
+                )
+            except (ArithmeticError, TypeError, ValueError) as exc:
+                _LOGGER.warning(
+                    "Unable to estimate Shenzhen daily charges for account %s: %s",
+                    redact_identifier(account.account_number),
+                    exc,
+                )
+
+        cost_is_official = _is_available_value(total_cost)
+        if not cost_is_official:
+            total_cost = calculation.estimated_cost
+
+        attributes = {
+            ATTR_KEY_BILLING_MONTH: f"{year_month[0]:04d}-{year_month[1]:02d}",
+            ATTR_KEY_COST_SOURCE: (
+                DAILY_CHARGE_SOURCE_API
+                if cost_is_official
+                else DAILY_CHARGE_SOURCE_ESTIMATE
+            ),
+            ATTR_KEY_COST_ESTIMATED: not cost_is_official,
+            ATTR_KEY_TARIFF_SOURCE: SHENZHEN_TARIFF_SOURCE,
+            ATTR_KEY_TARIFF_SEASON: calculation.season,
+            ATTR_KEY_TARIFF_FIRST_TIER_LIMIT_KWH: (
+                calculation.first_tier_limit_kwh
+            ),
+            ATTR_KEY_TARIFF_SECOND_TIER_LIMIT_KWH: (
+                calculation.second_tier_limit_kwh
+            ),
+        }
+        return total_cost, by_day, calculation, attributes
 
     async def _async_refresh_client(self):
         """Refresh the client, update the user data.
@@ -697,6 +795,35 @@ class CSGCoordinator(DataUpdateCoordinator):
                 STATE_UNAVAILABLE,
             )
 
+        (
+            this_month_cost,
+            this_month_by_day,
+            tariff_calculation,
+            tariff_attributes,
+        ) = self._apply_shenzhen_tariff_estimate(
+            account,
+            self._this_month_ym,
+            this_month_cost,
+            this_month_kwh,
+            this_month_by_day,
+        )
+        if tariff_calculation is not None:
+            ladder_stage = tariff_calculation.tier_code
+            ladder_remaining_kwh = tariff_calculation.remaining_kwh
+            ladder_tariff = tariff_calculation.current_tariff
+            ladder_start_date = (
+                f"{self._this_month_ym[0]:04d}-{self._this_month_ym[1]:02d}-01"
+            )
+            if isinstance(this_month_by_day, list):
+                tier_start_dates = [
+                    day[WF_ATTR_DATE]
+                    for day in this_month_by_day
+                    if day.get("tier_code") == ladder_stage
+                    and day.get(WF_ATTR_DATE)
+                ]
+                if tier_start_dates:
+                    ladder_start_date = tier_start_dates[0]
+
         if not this_month_by_day or this_month_by_day == STATE_UNAVAILABLE:
             # need last month's data to update `latest_day` entity
             self._if_update_last_month = True
@@ -707,9 +834,13 @@ class CSGCoordinator(DataUpdateCoordinator):
         self._gathered_data[account.account_number][
             SUFFIX_THIS_MONTH_COST
         ] = this_month_cost
-        self._gathered_data[account.account_number][ATTR_KEY_THIS_MONTH_BY_DAY] = {
+        month_attributes = {
             ATTR_KEY_THIS_MONTH_BY_DAY: this_month_by_day
         }
+        month_attributes.update(tariff_attributes)
+        self._gathered_data[account.account_number][
+            ATTR_KEY_THIS_MONTH_BY_DAY
+        ] = month_attributes
         self._gathered_data[account.account_number][
             SUFFIX_CURRENT_LADDER
         ] = ladder_stage
@@ -719,9 +850,21 @@ class CSGCoordinator(DataUpdateCoordinator):
         self._gathered_data[account.account_number][
             SUFFIX_CURRENT_LADDER_TARIFF
         ] = ladder_tariff
+        ladder_attributes = {
+            ATTR_KEY_CURRENT_LADDER_START_DATE: ladder_start_date
+        }
+        for attribute_key in (
+            ATTR_KEY_BILLING_MONTH,
+            ATTR_KEY_TARIFF_SOURCE,
+            ATTR_KEY_TARIFF_SEASON,
+            ATTR_KEY_TARIFF_FIRST_TIER_LIMIT_KWH,
+            ATTR_KEY_TARIFF_SECOND_TIER_LIMIT_KWH,
+        ):
+            if attribute_key in tariff_attributes:
+                ladder_attributes[attribute_key] = tariff_attributes[attribute_key]
         self._gathered_data[account.account_number][
             ATTR_KEY_CURRENT_LADDER_START_DATE
-        ] = {ATTR_KEY_CURRENT_LADDER_START_DATE: ladder_start_date}
+        ] = ladder_attributes
 
         self._this_month_update_completed_flag.set()
 
@@ -778,15 +921,32 @@ class CSGCoordinator(DataUpdateCoordinator):
                 STATE_UNAVAILABLE,
             )
 
+        (
+            last_month_cost,
+            last_month_by_day,
+            _,
+            tariff_attributes,
+        ) = self._apply_shenzhen_tariff_estimate(
+            account,
+            self._last_month_ym,
+            last_month_cost,
+            last_month_kwh,
+            last_month_by_day,
+        )
+
         self._gathered_data[account.account_number][
             SUFFIX_LAST_MONTH_KWH
         ] = last_month_kwh
         self._gathered_data[account.account_number][
             SUFFIX_LAST_MONTH_COST
         ] = last_month_cost
-        self._gathered_data[account.account_number][ATTR_KEY_LAST_MONTH_BY_DAY] = {
+        month_attributes = {
             ATTR_KEY_LAST_MONTH_BY_DAY: last_month_by_day
         }
+        month_attributes.update(tariff_attributes)
+        self._gathered_data[account.account_number][
+            ATTR_KEY_LAST_MONTH_BY_DAY
+        ] = month_attributes
 
     def _update_latest_day(self, account: CSGElectricityAccount):
         this_month_by_day = self._gathered_data[account.account_number][

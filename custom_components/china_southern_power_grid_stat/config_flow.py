@@ -33,9 +33,11 @@ from .const import (
     CONF_GENERAL_ERROR,
     CONF_LOGIN_TYPE,
     CONF_SETTINGS,
+    CONF_SHENZHEN_TARIFF_ESTIMATE,
     CONF_SMS_CODE,
     CONF_UPDATE_INTERVAL,
     CONF_UPDATED_AT,
+    DEFAULT_SHENZHEN_TARIFF_ESTIMATE,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     ERROR_CANNOT_CONNECT,
@@ -442,6 +444,7 @@ class CSGConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_ELE_ACCOUNTS: linked_accounts,
             CONF_SETTINGS: {
                 CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL,
+                CONF_SHENZHEN_TARIFF_ESTIMATE: DEFAULT_SHENZHEN_TARIFF_ESTIMATE,
             },
             CONF_UPDATED_AT: str(int(time.time() * 1000)),
         }
@@ -607,26 +610,44 @@ class CSGOptionsFlowHandler(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Settings of parameters"""
-        update_interval = self.config_entry.data[CONF_SETTINGS][CONF_UPDATE_INTERVAL]
+        settings = self.config_entry.data.get(CONF_SETTINGS, {})
+        update_interval = settings.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+        shenzhen_tariff_estimate = bool(
+            settings.get(
+                CONF_SHENZHEN_TARIFF_ESTIMATE,
+                DEFAULT_SHENZHEN_TARIFF_ESTIMATE,
+            )
+        )
         schema = vol.Schema(
             {
                 vol.Required(CONF_UPDATE_INTERVAL, default=update_interval): vol.All(
                     int, vol.Range(min=60), msg="刷新间隔不能低于60秒"
                 ),
+                vol.Optional(
+                    CONF_SHENZHEN_TARIFF_ESTIMATE,
+                    default=shenzhen_tariff_estimate,
+                ): bool,
             }
         )
         if user_input is None:
             return self.async_show_form(step_id=STEP_SETTINGS, data_schema=schema)
 
         new_data = dict(self.config_entry.data)
-        new_settings = dict(new_data[CONF_SETTINGS])
+        new_settings = dict(new_data.get(CONF_SETTINGS, {}))
         new_settings[CONF_UPDATE_INTERVAL] = user_input[CONF_UPDATE_INTERVAL]
+        new_settings[CONF_SHENZHEN_TARIFF_ESTIMATE] = bool(
+            user_input.get(
+                CONF_SHENZHEN_TARIFF_ESTIMATE,
+                DEFAULT_SHENZHEN_TARIFF_ESTIMATE,
+            )
+        )
         new_data[CONF_SETTINGS] = new_settings
         new_data[CONF_UPDATED_AT] = str(int(time.time() * 1000))
         self.hass.config_entries.async_update_entry(
             self.config_entry,
             data=new_data,
         )
+        await self.hass.config_entries.async_reload(self.config_entry.entry_id)
         return self.async_create_entry(
             title="",
             data={},

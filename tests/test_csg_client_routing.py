@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -294,7 +295,8 @@ def test_shenzhen_month_uses_calendar_endpoint_and_meter_number():
 
 
 def test_shenzhen_yesterday_uses_the_same_calendar_route():
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    yesterday -= timedelta(days=1)
     client = CSGClient(auth_token="secret", api_profile=API_PROFILE_APP)
     client._session = RecordingSession(
         _success(
@@ -313,7 +315,8 @@ def test_shenzhen_yesterday_uses_the_same_calendar_route():
 
 
 def test_yesterday_is_derived_from_month_detail():
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    yesterday -= timedelta(days=1)
     client = CSGClient(auth_token="secret", api_profile=API_PROFILE_WEB)
     client._session = RecordingSession(
         _success(

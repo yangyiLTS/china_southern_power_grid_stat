@@ -15,6 +15,7 @@ from base64 import b64decode, b64encode
 from copy import copy
 from hashlib import md5
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 from Crypto.Cipher import AES, PKCS1_v1_5
@@ -969,7 +970,8 @@ class CSGClient:
 
     def get_yesterday_kwh(self, account: CSGElectricityAccount) -> float | None:
         """Derive yesterday's usage from the maintained monthly detail API."""
-        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        yesterday = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        yesterday -= datetime.timedelta(days=1)
         _, _, _, by_day = self.get_month_daily_detail(
             account,
             (yesterday.year, yesterday.month),

@@ -82,6 +82,7 @@ def api_profile_for_login_type(login_type: LoginType | str) -> str:
     return API_PROFILE_APP
 
 AREACODE_FALLBACK = AREACODE_GUANGDONG = "030000"
+AREACODE_SHENZHEN_PREFIX = "09"
 
 # https://95598.csg.cn/js/chunk-31aec193.1.6.177.1667607288138.js
 CREDENTIAL_PUBKEY = (

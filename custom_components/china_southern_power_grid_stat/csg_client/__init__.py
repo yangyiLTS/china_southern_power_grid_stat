@@ -26,6 +26,7 @@ from .const import (
     API_PROFILE_TO_BASE_PATH,
     API_PROFILE_WEB,
     AREACODE_FALLBACK,
+    AREACODE_SHENZHEN_PREFIX,
     ATTR_ACCOUNT_NUMBER,
     ATTR_ADDRESS,
     ATTR_API_PROFILE,
@@ -642,7 +643,7 @@ class CSGClient:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
 
-    def api_query_electricity_calender(
+    def api_query_electricity_calendar(
         self,
         year: int,
         month: int,
@@ -651,7 +652,12 @@ class CSGClient:
         metering_point_id: str,
         metering_point_number: str,
     ) -> dict:
-        """get power in kWh, hi/lo/avg temperature by day in the given month"""
+        """Get Shenzhen daily usage and temperatures for a month.
+
+        The current CSG online-hall calendar sends Shenzhen accounts to this
+        endpoint instead of ``queryDayElectricByMPoint``. ``deviceIdentif`` is
+        the metering-point number, not the metering-point ID.
+        """
         path = "charge/queryElectricityCalendar"
         payload = {
             JSON_KEY_AREA_CODE: area_code,
@@ -664,6 +670,9 @@ class CSGClient:
         if resp_data[JSON_KEY_STA] == RESP_STA_SUCCESS:
             return resp_data[JSON_KEY_DATA]
         self._handle_unsuccessful_response(path, resp_data)
+
+    # Preserve compatibility with callers that used the historical typo.
+    api_query_electricity_calender = api_query_electricity_calendar
 
     def api_query_account_surplus(self, area_code: str, ele_customer_id: str):
         """Contains: balance and arrears"""
@@ -818,28 +827,43 @@ class CSGClient:
     def get_month_daily_detail(
         self, account: CSGElectricityAccount, year_month: tuple[int, int]
     ) -> tuple[float | None, float | None, dict, list[dict[str, str | float]]]:
-        """Get current month totals and daily usage from the maintained endpoint.
+        """Get monthly totals and daily usage from the regional endpoint.
 
-        The current web application exposes totalElectricity and totalPower from
-        queryDayElectricByMPoint. The former daily-charge endpoint was removed.
-        Daily charge is therefore included only when the maintained response
-        happens to provide it; callers must treat it as optional.
+        The current web application routes Shenzhen accounts to
+        ``queryElectricityCalendar`` and other regions to
+        ``queryDayElectricByMPoint``. Daily charge is included only when the
+        selected response provides it; callers must treat it as optional.
         """
 
         year, month = year_month
-        resp_data = self.api_query_day_electric_by_m_point(
-            year,
-            month,
-            account.area_code,
-            account.ele_customer_id,
-            account.metering_point_id,
-        )
+        if account.area_code.startswith(AREACODE_SHENZHEN_PREFIX):
+            resp_data = self.api_query_electricity_calendar(
+                year,
+                month,
+                account.area_code,
+                account.ele_customer_id,
+                account.metering_point_id,
+                account.metering_point_number,
+            )
+        else:
+            resp_data = self.api_query_day_electric_by_m_point(
+                year,
+                month,
+                account.area_code,
+                account.ele_customer_id,
+                account.metering_point_id,
+            )
 
         def optional_float(value: Any) -> float | None:
             return None if value in (None, "") else float(value)
 
         by_day = []
-        for d_data in resp_data.get("result") or []:
+        for d_data in sorted(
+            resp_data.get("result") or [],
+            key=lambda item: str(item.get("date", "")),
+        ):
+            if not d_data.get("date") or d_data.get("power") in (None, ""):
+                continue
             item = {
                 WF_ATTR_DATE: d_data["date"],
                 WF_ATTR_KWH: float(d_data["power"]),
@@ -869,12 +893,14 @@ class CSGClient:
             WF_ATTR_LADDER_TARIFF: optional_float(resp_data.get("ladderEleTariff")),
         }
 
-        return (
-            optional_float(resp_data.get("totalElectricity")),
-            optional_float(resp_data.get("totalPower")),
-            ladder,
-            by_day,
-        )
+        month_total_cost = optional_float(resp_data.get("totalElectricity"))
+        month_total_kwh = optional_float(resp_data.get("totalPower"))
+        if month_total_kwh is None and by_day:
+            # Shenzhen's calendar response exposes the daily result list but
+            # may omit totalPower. Do not invent a value for an empty result.
+            month_total_kwh = sum(item[WF_ATTR_KWH] for item in by_day)
+
+        return month_total_cost, month_total_kwh, ladder, by_day
 
     def get_month_daily_usage_detail(
         self, account: CSGElectricityAccount, year_month: tuple[int, int]
@@ -944,17 +970,14 @@ class CSGClient:
     def get_yesterday_kwh(self, account: CSGElectricityAccount) -> float | None:
         """Derive yesterday's usage from the maintained monthly detail API."""
         yesterday = datetime.date.today() - datetime.timedelta(days=1)
-        resp_data = self.api_query_day_electric_by_m_point(
-            yesterday.year,
-            yesterday.month,
-            account.area_code,
-            account.ele_customer_id,
-            account.metering_point_id,
+        _, _, _, by_day = self.get_month_daily_detail(
+            account,
+            (yesterday.year, yesterday.month),
         )
         target_date = yesterday.isoformat()
-        for item in resp_data.get("result") or []:
-            if item.get("date") == target_date and item.get("power") not in (None, ""):
-                return float(item["power"])
+        for item in by_day:
+            if item[WF_ATTR_DATE] == target_date:
+                return float(item[WF_ATTR_KWH])
         # CSG documents a T+3 publication window, so an absent value is normal.
         return None
 

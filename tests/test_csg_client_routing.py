@@ -186,6 +186,18 @@ def _account() -> CSGElectricityAccount:
     )
 
 
+def _shenzhen_account() -> CSGElectricityAccount:
+    return CSGElectricityAccount(
+        account_number="masked-shenzhen-account",
+        area_code="090000",
+        ele_customer_id="shenzhen-binding-id",
+        metering_point_id="shenzhen-meter-id",
+        metering_point_number="shenzhen-meter-number",
+        address="masked",
+        user_name="masked",
+    )
+
+
 def test_web_month_call_uses_current_crypto_and_decrypts_response():
     response_data = {
         "totalPower": "12.3",
@@ -247,6 +259,57 @@ def test_combined_month_detail_replaces_removed_daily_charge_api():
     assert ladder["ladder"] is None
     assert by_day[0] == {"date": "2026-08-01", "kwh": 15.8}
     assert by_day[1]["charge"] == 7.8
+
+
+def test_shenzhen_month_uses_calendar_endpoint_and_meter_number():
+    client = CSGClient(auth_token="secret", api_profile=API_PROFILE_APP)
+    client._session = RecordingSession(
+        _success(
+            {
+                "result": [
+                    {"date": "2026-09-02", "power": "15.59"},
+                    {"date": "2026-09-01", "power": "15.80"},
+                ]
+            }
+        )
+    )
+
+    total_cost, total_kwh, _, by_day = client.get_month_daily_detail(
+        _shenzhen_account(), (2026, 9)
+    )
+
+    call = client._session.calls[0]
+    assert call["url"] == BASE_PATH_APP + "charge/queryElectricityCalendar"
+    assert call["json"] == {
+        "areaCode": "090000",
+        "eleCustId": "shenzhen-binding-id",
+        "yearMonth": "202609",
+        "meteringPointId": "shenzhen-meter-id",
+        "deviceIdentif": "shenzhen-meter-number",
+    }
+    assert "need-crypto" not in call["headers"]
+    assert total_cost is None
+    assert total_kwh == pytest.approx(31.39)
+    assert [item["date"] for item in by_day] == ["2026-09-01", "2026-09-02"]
+
+
+def test_shenzhen_yesterday_uses_the_same_calendar_route():
+    yesterday = date.today() - timedelta(days=1)
+    client = CSGClient(auth_token="secret", api_profile=API_PROFILE_APP)
+    client._session = RecordingSession(
+        _success(
+            {
+                "result": [
+                    {"date": yesterday.isoformat(), "power": "9.75"},
+                ]
+            }
+        )
+    )
+
+    assert client.get_yesterday_kwh(_shenzhen_account()) == 9.75
+    assert client._session.calls[0]["url"] == (
+        BASE_PATH_APP + "charge/queryElectricityCalendar"
+    )
 
 
 def test_yesterday_is_derived_from_month_detail():

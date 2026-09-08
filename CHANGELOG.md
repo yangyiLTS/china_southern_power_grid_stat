@@ -4,7 +4,7 @@ All notable changes to this maintained fork are documented here. The format is
 based on Keep a Changelog and releases follow semantic versioning where the
 upstream component version permits it.
 
-## [Unreleased]
+## [1.4.1] - 2026-09-08
 
 ### Added
 
@@ -61,6 +61,7 @@ upstream component version permits it.
 
 Original upstream release. See the upstream Git history for earlier changes.
 
+[1.4.1]: https://github.com/yangyiLTS/china_southern_power_grid_stat/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/benj-tang/china_southern_power_grid_stat/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/benj-tang/china_southern_power_grid_stat/compare/v1.2.0...v1.3.1
 [1.2.0]: https://github.com/CubicPill/china_southern_power_grid_stat/releases/tag/v1.2.0

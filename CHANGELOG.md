@@ -4,6 +4,13 @@ All notable changes to this maintained fork are documented here. The format is
 based on Keep a Changelog and releases follow semantic versioning where the
 upstream component version permits it.
 
+## [Unreleased]
+
+### Fixed
+
+- Route Shenzhen daily usage and exact-yesterday lookups through the regional
+  electricity-calendar API used by the official client.
+
 ## [1.4.0] - 2026-08-05
 
 ### Added

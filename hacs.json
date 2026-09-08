@@ -1,5 +1,5 @@
 {
-  "name": "China Southern Power Grid Statistics",
+  "name": "China Southern Power Grid Statistics (Shenzhen Fork)",
   "render_readme": true,
   "country": "CN",
   "homeassistant": "2024.11.0"

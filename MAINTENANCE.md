@@ -39,14 +39,18 @@ SMS sessions use the handheld profile. Callers persist only an allowlisted
 profile name, never a caller-supplied URL.
 
 The retired `queryDayElectricChargeByMPoint` and
-`queryDayElectricByMPointYesterday` routes are intentionally absent. Monthly
-usage and any optional cost data come from `queryDayElectricByMPoint`;
-yesterday's value is derived only from an exact date match. Annual totals and
-monthly annual-analysis rows come from `getAnalyzeFeeDetails`.
+`queryDayElectricByMPointYesterday` routes are intentionally absent. Shenzhen
+accounts whose area code begins with `09` use the official client's
+`charge/queryElectricityCalendar` route; other regions continue to use
+`queryDayElectricByMPoint`. Yesterday's value is derived only from an exact date
+match in the corresponding monthly response. Annual totals and monthly
+annual-analysis rows come from `getAnalyzeFeeDetails`.
 
-Missing fields remain unavailable. In particular, no local tariff model may
-turn a missing official charge or ladder value into an apparently official
-sensor value.
+Missing fields remain unavailable by default. The optional Shenzhen residential
+tariff model may fill a missing charge only when the user enables it, and every
+calculated value must remain distinguishable from an official value through
+explicit estimate and source attributes. It must never overwrite official
+current or historical charges.
 
 ## Release gate
 

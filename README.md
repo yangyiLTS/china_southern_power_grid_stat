@@ -1,17 +1,40 @@
 # China Southern Power Grid Statistics for Home Assistant
 
-南方电网电费数据的 Home Assistant 自定义集成（社区维护版）。
+南方电网电费数据的 Home Assistant 自定义集成——面向深圳用户的社区修复版。
 
-[![Release](https://img.shields.io/github/v/release/benj-tang/china_southern_power_grid_stat)](https://github.com/benj-tang/china_southern_power_grid_stat/releases)
-[![Tests](https://github.com/benj-tang/china_southern_power_grid_stat/actions/workflows/test.yml/badge.svg)](https://github.com/benj-tang/china_southern_power_grid_stat/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/yangyiLTS/china_southern_power_grid_stat)](https://github.com/yangyiLTS/china_southern_power_grid_stat/releases)
+[![Tests](https://github.com/yangyiLTS/china_southern_power_grid_stat/actions/workflows/test.yml/badge.svg)](https://github.com/yangyiLTS/china_southern_power_grid_stat/actions/workflows/test.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
 > [!IMPORTANT]
-> 本项目不是南方电网官方集成，也不是原项目的官方续作。它保留原项目历史与
-> GPL-3.0 许可，并针对当前南网在线接口和新版 Home Assistant 做社区维护。
-> 云端接口可能随时变化，请勿把本集成用于计费争议或关键财务判断。
+> 这是 [benj-tang 社区维护版](https://github.com/benj-tang/china_southern_power_grid_stat)
+> 的下游 fork，只额外维护“深圳逐日用电接口”和“深圳居民阶梯电价估算”两项
+> 差异。它不是南方电网官方集成，云端接口也可能随时变化；请勿将本集成用于
+> 计费争议或关键财务判断，最终电量和费用以南方电网官方账单为准。
 
-## 维护版改进
+## 这个 fork 修改了什么
+
+### 1. 修复深圳逐日用电数据
+
+南网当前官方客户端会根据地区选择不同的逐日用电接口。深圳缴费号（区域代码以
+`09` 开头）使用 `charge/queryElectricityCalendar`，其他地区使用通用逐日接口。
+上游社区版尚未区分这条深圳路径，可能出现官方小程序已经有近几日数据、HA 中却
+一直缺失，或者通用接口返回非成功状态的情况。
+
+本 fork 对深圳账号改用官方客户端对应的日历接口，并让“昨日用电”复用同一路由；
+其他地区的接口行为不变。日期判断使用中国时区，南网尚未发布 T+3 数据时保持未知，
+不会把缺失数据写成 0。
+
+### 2. 增加可选的深圳居民阶梯电价估算
+
+深圳月度接口有时只返回逐日电量而不返回逐日电费。本 fork 提供一个**默认关闭**的
+实验性选项，可根据深圳普通居民月度阶梯电价补齐缺失费用。南网返回的官方费用永远
+优先；所有本地计算值都会标记为估算，历史月份的官方数据不会被覆盖。
+
+完整实现和限制见下方“深圳居民阶梯电价估算（可选）”，逐版本变化见
+[CHANGELOG.md](CHANGELOG.md)。
+
+## 继承自上游维护版
 
 - 支持 Home Assistant 2025.12+ 的配置流与 Python 3.14；已在
   Home Assistant 2026.7.4 / Python 3.14.6 实机验证。
@@ -22,8 +45,7 @@
 - 登录态失效时启动 HA 重新认证，并显示去重的持久通知；重新登录后自动清除。
 - 请求超时 30 秒；日志会遮蔽手机号、缴费号，不记录密码、令牌或完整 API 响应。
 
-完整变更见 [CHANGELOG.md](CHANGELOG.md)，维护原则与来源见
-[MAINTENANCE.md](MAINTENANCE.md)。
+上游维护原则与来源见 [MAINTENANCE.md](MAINTENANCE.md)。
 
 ## 数据范围
 
@@ -46,13 +68,22 @@
 ### HACS 自定义仓库
 
 1. 在 HACS 中打开“自定义仓库”。
-2. 添加 `https://github.com/benj-tang/china_southern_power_grid_stat`，类别选择
+2. 添加 `https://github.com/yangyiLTS/china_southern_power_grid_stat`，类别选择
    `Integration`。
 3. 安装后重启 Home Assistant。
 
+普通用户只需安装默认 `main` 分支或最新 Release，不需要手动切换到
+`codex/shenzhen-calendar-support` 或 `codex/shenzhen-tariff-option`。
+
+> [!WARNING]
+> 本 fork 与上游使用相同的集成域名 `china_southern_power_grid_stat`，两者不能
+> 同时安装。已经通过 HACS 安装上游版本时，请先备份 HA，在 HACS 中移除旧的下载
+> 来源后再添加本 fork；不要为了切换代码来源而删除“设置 → 设备与服务”中的南网
+> 配置项，否则可能需要重新登录。
+
 ### 手动安装
 
-从 [Releases](https://github.com/benj-tang/china_southern_power_grid_stat/releases)
+从 [Releases](https://github.com/yangyiLTS/china_southern_power_grid_stat/releases)
 下载发布包，将其中的 `china_southern_power_grid_stat` 目录复制到：
 
 ```text
@@ -96,6 +127,17 @@
 电价与阶梯依据：[深圳市发展和改革委员会居民生活用电电价表](https://fgw.sz.gov.cn/attachment/1/1460/1460239/11394935.pdf)、
 [深圳市价格认定与监测中心电价说明](https://szjgdj.sz.gov.cn/home/ztzl/mxq/jmlb/content/post_1108363.html)。
 
+## 分支与更新方式
+
+- `main`：面向普通用户的可安装版本，包含深圳接口修复和可选阶梯电价估算；
+- `codex/shenzhen-calendar-support`：仅包含深圳接口修复，保留用于审阅差异；
+- `codex/shenzhen-tariff-option`：在接口修复之上增加阶梯电价功能，保留用于审阅差异；
+- 上游更新不会自动进入本 fork。涉及登录、认证或南网接口的后续修复，需要评估后
+  再同步，避免覆盖深圳专用逻辑。
+
+如果你不在深圳，建议优先使用
+[上游社区维护版](https://github.com/benj-tang/china_southern_power_grid_stat)。
+
 ## 隐私与安全
 
 - 不要在 issue、日志或截图中提交手机号、缴费号、姓名、地址、二维码、Cookie、
@@ -112,12 +154,16 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+报告问题时请说明 Home Assistant 版本、安装版本、地区、登录方式和缺失的数据类型，
+但不要附上未经脱敏的 API 响应。本 fork 只处理深圳逐日接口和深圳阶梯电价估算
+相关问题；通用登录、认证和其他省份问题请优先反馈给上游社区维护版。开发约定见
+[CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 致谢与许可
 
-本维护版基于 [CubicPill/china_southern_power_grid_stat](https://github.com/CubicPill/china_southern_power_grid_stat)，
-并选择性吸收 `elvinsophus`、`seagaruda`、`L1yp` 等社区维护者的修复；具体提交与
-作者归属记录在 Git 历史和 [MAINTENANCE.md](MAINTENANCE.md) 中。
+本 fork 基于 [benj-tang/china_southern_power_grid_stat](https://github.com/benj-tang/china_southern_power_grid_stat)，
+其维护版源自 [CubicPill/china_southern_power_grid_stat](https://github.com/CubicPill/china_southern_power_grid_stat)，
+并保留全部 Git 历史和作者归属。深圳专用改动可在本仓库的两个功能分支及
+[CHANGELOG.md](CHANGELOG.md) 中查看。
 
 项目按 [GNU GPL v3](LICENSE) 发布。
